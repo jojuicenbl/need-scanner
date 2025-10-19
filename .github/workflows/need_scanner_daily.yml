@@ -94,77 +94,100 @@ jobs:
           git diff --quiet && git diff --staged --quiet || git commit -m "Update history [skip ci]"
           git push || true
 
-      # Extract key metrics for Slack notification
-      - name: Extract metrics
+      # Send Slack notification with Python (handles special characters properly)
+      - name: Send Slack notification
         if: success()
-        id: metrics
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           OUTPUT_DIR="data/daily/$(date +%Y%m%d)"
 
-          # Count total posts from meta.json
-          TOTAL_POSTS=$(python3 -c "import json; data=json.load(open('${OUTPUT_DIR}/meta.json')); print(len(data))" 2>/dev/null || echo "N/A")
+          python3 << 'EOF'
+          import json
+          import os
+          import csv
+          import urllib.request
 
-          # Count clusters and get top priority from insights_enriched.csv
-          if [ -f "${OUTPUT_DIR}/insights_enriched.csv" ]; then
-            CLUSTERS=$(tail -n +2 "${OUTPUT_DIR}/insights_enriched.csv" | wc -l | tr -d ' ')
-            TOP_TITLE=$(tail -n +2 "${OUTPUT_DIR}/insights_enriched.csv" | head -1 | cut -d',' -f5)
-            TOP_SCORE=$(tail -n +2 "${OUTPUT_DIR}/insights_enriched.csv" | head -1 | cut -d',' -f4)
-          else
-            CLUSTERS="N/A"
-            TOP_TITLE="N/A"
-            TOP_SCORE="N/A"
-          fi
+          output_dir = os.environ.get('OUTPUT_DIR', 'data/daily')
+          webhook_url = os.environ['SLACK_WEBHOOK_URL']
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          echo "total_posts=${TOTAL_POSTS}" >> $GITHUB_OUTPUT
-          echo "clusters=${CLUSTERS}" >> $GITHUB_OUTPUT
-          echo "top_title=${TOP_TITLE}" >> $GITHUB_OUTPUT
-          echo "top_score=${TOP_SCORE}" >> $GITHUB_OUTPUT
+          # Extract metrics
+          try:
+              with open(f'{output_dir}/meta.json', 'r') as f:
+                  meta = json.load(f)
+                  total_posts = len(meta)
+          except:
+              total_posts = "N/A"
 
-      # Send Slack notification
-      - name: Notify Slack
-        if: success()
-        run: |
-          curl -X POST ${{ secrets.SLACK_WEBHOOK_URL }} \
-            -H 'Content-Type: application/json' \
-            -d '{
+          try:
+              with open(f'{output_dir}/insights_enriched.csv', 'r', encoding='utf-8') as f:
+                  reader = csv.DictReader(f)
+                  rows = list(reader)
+                  clusters = len(rows)
+                  if rows:
+                      top = rows[0]
+                      top_title = top['title']
+                      top_score = top['priority_score']
+                  else:
+                      top_title = "N/A"
+                      top_score = "N/A"
+          except:
+              clusters = "N/A"
+              top_title = "N/A"
+              top_score = "N/A"
+
+          # Build Slack payload
+          payload = {
               "text": "Need Scanner daily run complete!",
               "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "✅ Need Scanner Daily Scan Complete"
+                  {
+                      "type": "header",
+                      "text": {
+                          "type": "plain_text",
+                          "text": "✅ Need Scanner Daily Scan Complete"
+                      }
+                  },
+                  {
+                      "type": "section",
+                      "fields": [
+                          {
+                              "type": "mrkdwn",
+                              "text": f"*Posts Analyzed:*\n{total_posts}"
+                          },
+                          {
+                              "type": "mrkdwn",
+                              "text": f"*Clusters Found:*\n{clusters}"
+                          }
+                      ]
+                  },
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"*Top Priority:*\n{top_title} (Score: {top_score})"
+                      }
+                  },
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"<{run_url}|View Full Results>"
+                      }
                   }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Posts Analyzed:*\n${{ steps.metrics.outputs.total_posts }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Clusters Found:*\n${{ steps.metrics.outputs.clusters }}"
-                    }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Top Priority:*\n${{ steps.metrics.outputs.top_title }} (Score: ${{ steps.metrics.outputs.top_score }})"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Full Results>"
-                  }
-                }
               ]
-            }'
+          }
+
+          # Send to Slack
+          req = urllib.request.Request(
+              webhook_url,
+              data=json.dumps(payload).encode('utf-8'),
+              headers={'Content-Type': 'application/json'}
+          )
+
+          with urllib.request.urlopen(req) as response:
+              print(f"Slack notification sent: {response.status}")
+          EOF
 
       - name: Cleanup old artifacts
         uses: geekyeggo/delete-artifact@v5
