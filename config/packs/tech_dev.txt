@@ -1,0 +1,30 @@
+# Tech & Developer Pack
+# Subreddits for software developers and tech entrepreneurs
+
+# Programming
+programming
+webdev
+javascript
+Python
+golang
+rust
+
+# SaaS & Products
+SaaS
+microsaas
+buildinpublic
+IndieHackers
+startups
+
+# Ops & Infrastructure
+devops
+aws
+kubernetes
+docker
+selfhosted
+
+# Specific tech needs
+datascience
+machinelearning
+webhosting
+cscareerquestions

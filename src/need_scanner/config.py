@@ -79,3 +79,86 @@ PRICING = {
 def get_model_pricing(model: str) -> dict:
     """Get pricing for a model, with fallback to gpt-4o-mini."""
     return PRICING.get(model, PRICING["gpt-4o-mini"])
+
+
+# ============================================================================
+# Pack & Keyword Loaders
+# ============================================================================
+
+def load_subreddit_pack(pack_name: str, config_dir: Path = Path("config/packs")) -> list[str]:
+    """
+    Load a subreddit pack from config/packs/{pack_name}.txt
+
+    Args:
+        pack_name: Name of the pack (without .txt extension)
+        config_dir: Directory containing pack files
+
+    Returns:
+        List of subreddit names
+
+    Raises:
+        FileNotFoundError: If pack file doesn't exist
+    """
+    pack_file = config_dir / f"{pack_name}.txt"
+
+    if not pack_file.exists():
+        raise FileNotFoundError(
+            f"Pack '{pack_name}' not found at {pack_file}. "
+            f"Available packs: {', '.join([f.stem for f in config_dir.glob('*.txt')])}"
+        )
+
+    subreddits = []
+    with open(pack_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            # Skip empty lines and comments
+            if line and not line.startswith('#'):
+                subreddits.append(line)
+
+    return subreddits
+
+
+def load_intent_keywords(keywords_file: Path = Path("config/intent_patterns.txt")) -> list[str]:
+    """
+    Load intent keywords/patterns from config file.
+
+    Args:
+        keywords_file: Path to keywords file
+
+    Returns:
+        List of keyword patterns (case-insensitive)
+
+    Raises:
+        FileNotFoundError: If keywords file doesn't exist
+    """
+    if not keywords_file.exists():
+        raise FileNotFoundError(
+            f"Keywords file not found at {keywords_file}. "
+            "Please create config/intent_patterns.txt with your keywords (one per line)."
+        )
+
+    keywords = []
+    with open(keywords_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            # Skip empty lines and comments
+            if line and not line.startswith('#'):
+                keywords.append(line)
+
+    return keywords
+
+
+def list_available_packs(config_dir: Path = Path("config/packs")) -> list[str]:
+    """
+    List all available subreddit packs.
+
+    Args:
+        config_dir: Directory containing pack files
+
+    Returns:
+        List of pack names (without .txt extension)
+    """
+    if not config_dir.exists():
+        return []
+
+    return [f.stem for f in config_dir.glob("*.txt")]

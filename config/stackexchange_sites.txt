@@ -1,0 +1,33 @@
+# Stack Exchange Sites Configuration
+# Format: one site per line (site identifier)
+# Lines starting with # = comments
+
+# Find site list at: https://stackexchange.com/sites
+
+# ═══════════════════════════════════════════════════════════
+# TECH & DEVELOPMENT
+# ═══════════════════════════════════════════════════════════
+
+stackoverflow
+softwareengineering
+programmers
+webmasters
+devops
+
+# ═══════════════════════════════════════════════════════════
+# BUSINESS & PROFESSIONAL
+# ═══════════════════════════════════════════════════════════
+
+startups
+workplace
+freelancing
+money
+productivity
+
+# ═══════════════════════════════════════════════════════════
+# SPECIALIZED
+# ═══════════════════════════════════════════════════════════
+
+ux
+pm
+marketing

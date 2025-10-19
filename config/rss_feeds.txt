@@ -1,0 +1,36 @@
+# RSS Feeds Configuration
+# One feed URL per line
+# Lines starting with # are comments
+
+# Indie Hackers
+https://www.indiehackers.com/feed
+
+# Product Hunt (Daily)
+https://www.producthunt.com/feed
+
+# Hacker News RSS (alternative to API)
+https://hnrss.org/newest?points=20
+
+# Y Combinator Blog
+https://blog.ycombinator.com/feed/
+
+# Indie Worldwide (Indie maker community)
+https://indieworldwide.co/feed
+
+# MicroConf (SaaS/bootstrapping)
+https://microconf.com/feed/
+
+# Baremetrics Blog (SaaS metrics)
+https://baremetrics.com/blog/rss
+
+# SaaS Weekly
+https://saasweekly.com/feed/
+
+# Bootstrapped Web
+https://bootstrappedweb.com/feed/
+
+# TechCrunch Startups
+https://techcrunch.com/tag/startups/feed/
+
+# Example: Add more relevant feeds for your niche
+# https://example.com/blog/feed

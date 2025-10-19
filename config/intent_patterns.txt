@@ -1,0 +1,66 @@
+# Intent patterns - Keywords that signal user pain points, needs, and willingness to pay
+# One pattern per line, case-insensitive matching
+# Mixed FR/EN patterns for maximum coverage
+
+# Alternative seeking
+alternative to
+looking for alternative
+need cheaper
+alternative moins chère
+cherche alternative
+
+# Pain & problems
+too expensive
+pricing too high
+problem with
+issue with
+bug with
+can't find software
+doesn't work
+ne fonctionne pas
+problème avec
+
+# Search & discovery
+how do you manage
+comment gérer
+je cherche un outil
+looking for a tool
+need a solution
+besoin d'un outil
+outil pour
+
+# Feature requests
+need to export
+export csv
+export data
+integration with
+intégration avec
+besoin d'intégrer
+
+# Business pain points
+no show
+chargeback
+refunds
+remboursements
+invoice overdue
+facture impayée
+late payment
+paiement en retard
+
+# Compliance & legal
+RGPD
+GDPR
+TVA
+VAT
+URSSAF
+compliance
+conformité
+
+# Price sensitivity
+can't afford
+trop cher
+budget limité
+limited budget
+free alternative
+gratuit
+open source alternative

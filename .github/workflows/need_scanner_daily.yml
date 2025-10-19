@@ -1,0 +1,176 @@
+name: Need Scanner Daily
+
+on:
+  schedule:
+    # Run every day at 06:15 UTC (08:15 Paris time)
+    - cron: "15 6 * * *"
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      pack:
+        description: 'Subreddit pack to use'
+        required: false
+        default: 'smallbiz_fr'
+      reddit_limit:
+        description: 'Posts per subreddit'
+        required: false
+        default: '240'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create data directories
+        run: |
+          mkdir -p data/raw
+          mkdir -p data/history
+          mkdir -p data/daily
+
+      - name: Collect posts
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -m need_scanner collect-all \
+            --pack ${{ github.event.inputs.pack || 'smallbiz_fr' }} \
+            --reddit-limit ${{ github.event.inputs.reddit_limit || '240' }} \
+            --reddit-mode hot \
+            --hn-days 30 \
+            --rss-days 30 \
+            --include-keywords-file config/intent_patterns.txt \
+            --history-days 45 \
+            --filter-lang en,fr \
+            --filter-intent
+
+      - name: Prefilter posts
+        run: |
+          python -m need_scanner prefilter \
+            --filter-lang en,fr \
+            --filter-intent \
+            --keep-intents pain,request \
+            --detect-wtp
+
+      - name: Run pipeline
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -m need_scanner run \
+            --clusters 12 \
+            --novelty-weight 0.15 \
+            --trend-weight 0.15 \
+            --history-path data/history \
+            --output-dir data/daily/$(date +%Y%m%d)
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-insights-${{ github.run_number }}
+          path: |
+            data/daily/**/insights_enriched.csv
+            data/daily/**/cluster_results.json
+          retention-days: 30
+
+      # Optional: Commit history files back to repo
+      - name: Commit history
+        if: success()
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add data/history/*.json || true
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update history [skip ci]"
+          git push || true
+
+      # Extract key metrics for Slack notification
+      - name: Extract metrics
+        if: success()
+        id: metrics
+        run: |
+          OUTPUT_DIR="data/daily/$(date +%Y%m%d)"
+
+          # Count total posts from meta.json
+          TOTAL_POSTS=$(python3 -c "import json; data=json.load(open('${OUTPUT_DIR}/meta.json')); print(len(data))" 2>/dev/null || echo "N/A")
+
+          # Count clusters and get top priority from insights_enriched.csv
+          if [ -f "${OUTPUT_DIR}/insights_enriched.csv" ]; then
+            CLUSTERS=$(tail -n +2 "${OUTPUT_DIR}/insights_enriched.csv" | wc -l | tr -d ' ')
+            TOP_TITLE=$(tail -n +2 "${OUTPUT_DIR}/insights_enriched.csv" | head -1 | cut -d',' -f5)
+            TOP_SCORE=$(tail -n +2 "${OUTPUT_DIR}/insights_enriched.csv" | head -1 | cut -d',' -f4)
+          else
+            CLUSTERS="N/A"
+            TOP_TITLE="N/A"
+            TOP_SCORE="N/A"
+          fi
+
+          echo "total_posts=${TOTAL_POSTS}" >> $GITHUB_OUTPUT
+          echo "clusters=${CLUSTERS}" >> $GITHUB_OUTPUT
+          echo "top_title=${TOP_TITLE}" >> $GITHUB_OUTPUT
+          echo "top_score=${TOP_SCORE}" >> $GITHUB_OUTPUT
+
+      # Send Slack notification
+      - name: Notify Slack
+        if: success()
+        run: |
+          curl -X POST ${{ secrets.SLACK_WEBHOOK_URL }} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "text": "Need Scanner daily run complete!",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "✅ Need Scanner Daily Scan Complete"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Posts Analyzed:*\n${{ steps.metrics.outputs.total_posts }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Clusters Found:*\n${{ steps.metrics.outputs.clusters }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Top Priority:*\n${{ steps.metrics.outputs.top_title }} (Score: ${{ steps.metrics.outputs.top_score }})"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Full Results>"
+                  }
+                }
+              ]
+            }'
+
+      - name: Cleanup old artifacts
+        uses: geekyeggo/delete-artifact@v5
+        if: success()
+        with:
+          name: daily-insights-*
+          useGlob: true
+          failOnError: false
+          # Keep last 7 days
+          retentionDays: 7

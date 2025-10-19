@@ -1,0 +1,32 @@
+# Service Businesses & Human Services Pack
+# Focus on service providers, consultants, freelancers
+
+# Freelancing & consulting
+freelance
+consulting
+Fiverr
+Upwork
+freelanceWriters
+
+# Professional services
+marketing
+RealEstate
+realtors
+Insurance
+LegalAdvice
+
+# Healthcare & wellness
+Therapy
+mentalhealth
+Fitness
+nutrition
+
+# Education & coaching
+Teachers
+OnlineEducation
+LifeProTips
+
+# Local services
+smallbusiness
+sweatystartup
+EntrepreneurRideAlong

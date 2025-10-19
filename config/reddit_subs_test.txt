@@ -1,0 +1,4 @@
+# Test config - just 3 subreddits for testing
+freelance
+Entrepreneur
+smallbusiness

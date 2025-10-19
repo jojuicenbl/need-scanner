@@ -1,0 +1,57 @@
+# Configuration des requêtes Twitter/X
+# Format: Une requête par ligne (syntaxe Twitter search)
+# Lignes commençant par # = commentaires
+
+# ═══════════════════════════════════════════════════════════
+# ENGLISH - Pain Points & Problems
+# ═══════════════════════════════════════════════════════════
+
+# General help requests
+("need help" OR "struggling with" OR "how do I") -filter:retweets lang:en
+
+# Solution seeking
+("looking for solution" OR "does anyone know" OR "any recommendations") -filter:retweets lang:en
+
+# Frustration signals
+("frustrated" OR "annoying" OR "wish there was") -filter:retweets lang:en
+
+# Business specific
+("small business" OR "freelance" OR "entrepreneur") ("problem" OR "challenge" OR "need") -filter:retweets lang:en
+
+# Pricing signals (WTP)
+("willing to pay" OR "would pay for" OR "shut up and take my money") -filter:retweets lang:en
+
+# ═══════════════════════════════════════════════════════════
+# FRANÇAIS - Points de douleur & Problèmes
+# ═══════════════════════════════════════════════════════════
+
+# Demandes d'aide générales
+("besoin d'aide" OR "galère avec" OR "comment faire") -filter:retweets lang:fr
+
+# Recherche de solution
+("cherche solution" OR "quelqu'un connaît" OR "des recommandations") -filter:retweets lang:fr
+
+# Signaux de frustration
+("frustré" OR "énervant" OR "j'aimerais qu'il existe") -filter:retweets lang:fr
+
+# Business FR
+("freelance" OR "entrepreneur" OR "PME") ("problème" OR "défi" OR "besoin") -filter:retweets lang:fr
+
+# ═══════════════════════════════════════════════════════════
+# SECTOR-SPECIFIC QUERIES
+# ═══════════════════════════════════════════════════════════
+
+# SaaS & Tech
+("SaaS" OR "software") ("missing" OR "doesn't exist" OR "need feature") -filter:retweets lang:en
+
+# Healthcare & Wellness
+("health" OR "therapy" OR "mental health") ("hard to find" OR "need help with") -filter:retweets lang:en
+
+# Education
+("teaching" OR "education" OR "learning") ("struggling" OR "difficult to") -filter:retweets lang:en
+
+# Ecommerce & Retail
+("online store" OR "ecommerce" OR "selling") ("problem" OR "pain point") -filter:retweets lang:en
+
+# Marketing
+("marketing" OR "content creation" OR "social media") ("time consuming" OR "tedious") -filter:retweets lang:en

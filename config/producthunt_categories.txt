@@ -1,0 +1,31 @@
+# Product Hunt Categories Configuration
+# Format: one category per line (kebab-case slug)
+# Lines starting with # = comments
+
+# ═══════════════════════════════════════════════════════════
+# TECH & DEVELOPMENT
+# ═══════════════════════════════════════════════════════════
+
+developer-tools
+artificial-intelligence
+productivity
+saas
+no-code
+tech
+
+# ═══════════════════════════════════════════════════════════
+# BUSINESS & MARKETING
+# ═══════════════════════════════════════════════════════════
+
+marketing
+analytics
+sales
+customer-communication
+social-media
+
+# ═══════════════════════════════════════════════════════════
+# DESIGN & CREATIVITY
+# ═══════════════════════════════════════════════════════════
+
+design-tools
+user-experience

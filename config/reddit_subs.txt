@@ -1,0 +1,59 @@
+# Configuration des Subreddits Multi-Secteur
+# Format: un subreddit par ligne (sans r/)
+# Lignes commençant par # = commentaires
+
+# ═══════════════════════════════════════════════════════════
+# BUSINESS & ENTREPRENEURIAT
+# ═══════════════════════════════════════════════════════════
+
+freelance
+Entrepreneur
+smallbusiness
+SaaS
+startups
+Bootstrapped
+
+# ═══════════════════════════════════════════════════════════
+# TECH & DEV (garder quelques-uns)
+# ═══════════════════════════════════════════════════════════
+
+webdev
+sideproject
+
+# ═══════════════════════════════════════════════════════════
+# FRANCE & INDÉPENDANTS FR
+# ═══════════════════════════════════════════════════════════
+
+france
+vosfinances
+besoindeparler
+
+# ═══════════════════════════════════════════════════════════
+# MÉTIERS SPÉCIALISÉS
+# ═══════════════════════════════════════════════════════════
+
+# Santé & Bien-être
+therapy
+healthcare
+mentalhealth
+
+# Éducation & Formation
+Teachers
+OnlineEducation
+
+# Restauration & Retail
+FoodService
+smallbusinessuk
+retailhell
+
+# Services pros
+marketing
+sales
+consulting
+Bookkeeping
+legaladvice
+
+# Créateurs & Artisans
+Etsy
+ArtisanVideos
+Handmade

@@ -1,0 +1,31 @@
+# Europe & France Pack
+# European and French-focused communities
+
+# France
+france
+french
+paris
+Lyon
+Marseille
+AskFrance
+besoindeparler
+vosfinances
+entrepreneurfrance
+
+# Europe general
+europe
+AskEurope
+eupersonalfinance
+digitalnomad
+
+# Specific countries
+de_IAmA
+thenetherlands
+belgium
+UKPersonalFinance
+Spain
+
+# Expat & immigration
+IWantOut
+expats
+immigration

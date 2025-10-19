@@ -1,0 +1,35 @@
+# Small Business & Entrepreneur Pack (FR focus)
+# Subreddits focused on French and international small business
+
+# General business
+smallbusiness
+Entrepreneur
+Business_Ideas
+EntrepreneurRideAlong
+sweatystartup
+
+# E-commerce
+ecommerce
+shopify
+woocommerce
+Etsy
+AmazonSeller
+
+# Finance & accounting
+Accounting
+Bookkeeping
+QuickBooks
+freelance
+consulting
+
+# France-specific
+france
+entrepreneurfrance
+vosfinances
+AskFrance
+besoindeparler
+
+# Legal & admin
+legaladvice
+tax
+immigration

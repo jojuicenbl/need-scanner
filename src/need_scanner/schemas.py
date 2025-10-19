@@ -16,6 +16,7 @@ class Post(BaseModel):
     comments_count: Optional[int] = 0  # Renamed from num_comments
     lang: Optional[str] = None  # Language detected (en, fr, etc.)
     intent: Optional[str] = None  # pain, request, howto, promo, news, other
+    wtp_signals: Optional[dict] = None  # Willingness-to-pay signal detection results
     raw: dict
 
     # Backward compatibility aliases
@@ -85,6 +86,8 @@ class EnrichedInsight(BaseModel):
     heuristic_score: Optional[float] = None
     traction_score: Optional[float] = None
     novelty_score: Optional[float] = None
+    trend_score: Optional[float] = None  # Week-over-week growth score
+    keywords_matched: List[str] = []  # Keywords that triggered inclusion
     source_mix: List[str] = []  # List of sources in this cluster
 
 
