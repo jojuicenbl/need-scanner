@@ -112,7 +112,6 @@ jobs:
           output_dir = os.environ.get('OUTPUT_DIR')
           webhook_url = os.environ['SLACK_WEBHOOK_URL']
           run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          artifact_url = f"{run_url.rsplit('/', 1)[0]}/artifacts"
 
           print(f"Looking for files in: {output_dir}")
 
@@ -223,7 +222,17 @@ jobs:
 
               blocks.append({"type": "divider"})
 
-          # Add action buttons
+          # Add footer with instructions
+          blocks.append({
+              "type": "section",
+              "text": {
+                  "type": "mrkdwn",
+                  "text": "💡 *How to download full results:*\n"
+                          "Click the button below → Scroll to *Artifacts* section → Download `daily-insights-XXX.zip`"
+              }
+          })
+
+          # Add action button
           blocks.append({
               "type": "actions",
               "elements": [
@@ -231,18 +240,10 @@ jobs:
                       "type": "button",
                       "text": {
                           "type": "plain_text",
-                          "text": "📥 Download CSV"
+                          "text": "📊 View Results & Download CSV"
                       },
-                      "url": artifact_url,
+                      "url": run_url,
                       "style": "primary"
-                  },
-                  {
-                      "type": "button",
-                      "text": {
-                          "type": "plain_text",
-                          "text": "🔍 View Logs"
-                      },
-                      "url": run_url
                   }
               ]
           })
