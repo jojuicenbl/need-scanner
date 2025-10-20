@@ -100,28 +100,37 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          OUTPUT_DIR="data/daily/$(date +%Y%m%d)"
+          export OUTPUT_DIR="data/daily/$(date +%Y%m%d)"
 
           python3 << 'EOF'
           import json
           import os
           import csv
           import urllib.request
+          import traceback
 
-          output_dir = os.environ.get('OUTPUT_DIR', 'data/daily')
+          output_dir = os.environ.get('OUTPUT_DIR')
           webhook_url = os.environ['SLACK_WEBHOOK_URL']
           run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+          print(f"Looking for files in: {output_dir}")
+
           # Extract metrics
           try:
-              with open(f'{output_dir}/meta.json', 'r') as f:
+              meta_path = f'{output_dir}/meta.json'
+              print(f"Reading meta from: {meta_path}")
+              with open(meta_path, 'r') as f:
                   meta = json.load(f)
                   total_posts = len(meta)
-          except:
+              print(f"Found {total_posts} posts in meta.json")
+          except Exception as e:
+              print(f"Error reading meta.json: {e}")
               total_posts = "N/A"
 
           try:
-              with open(f'{output_dir}/insights_enriched.csv', 'r', encoding='utf-8') as f:
+              csv_path = f'{output_dir}/insights_enriched.csv'
+              print(f"Reading insights from: {csv_path}")
+              with open(csv_path, 'r', encoding='utf-8') as f:
                   reader = csv.DictReader(f)
                   rows = list(reader)
                   clusters = len(rows)
@@ -129,10 +138,13 @@ jobs:
                       top = rows[0]
                       top_title = top['title']
                       top_score = top['priority_score']
+                      print(f"Found {clusters} clusters, top: {top_title}")
                   else:
                       top_title = "N/A"
                       top_score = "N/A"
-          except:
+          except Exception as e:
+              print(f"Error reading insights_enriched.csv: {e}")
+              traceback.print_exc()
               clusters = "N/A"
               top_title = "N/A"
               top_score = "N/A"
@@ -196,5 +208,3 @@ jobs:
           name: daily-insights-*
           useGlob: true
           failOnError: false
-          # Keep last 7 days
-          retentionDays: 7
