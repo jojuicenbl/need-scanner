@@ -112,82 +112,145 @@ jobs:
           output_dir = os.environ.get('OUTPUT_DIR')
           webhook_url = os.environ['SLACK_WEBHOOK_URL']
           run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          artifact_url = f"{run_url.rsplit('/', 1)[0]}/artifacts"
 
           print(f"Looking for files in: {output_dir}")
 
           # Extract metrics
           try:
               meta_path = f'{output_dir}/meta.json'
-              print(f"Reading meta from: {meta_path}")
               with open(meta_path, 'r') as f:
                   meta = json.load(f)
                   total_posts = len(meta)
-              print(f"Found {total_posts} posts in meta.json")
+              print(f"Found {total_posts} posts")
           except Exception as e:
               print(f"Error reading meta.json: {e}")
               total_posts = "N/A"
 
+          # Read cluster results for cost info
+          try:
+              results_path = f'{output_dir}/cluster_results.json'
+              with open(results_path, 'r') as f:
+                  results = json.load(f)
+                  cost_info = results.get('cost_breakdown', {})
+                  total_cost = cost_info.get('total', 'N/A')
+          except:
+              total_cost = "N/A"
+
+          # Extract top clusters
+          top_clusters = []
+          clusters_count = "N/A"
           try:
               csv_path = f'{output_dir}/insights_enriched.csv'
-              print(f"Reading insights from: {csv_path}")
               with open(csv_path, 'r', encoding='utf-8') as f:
                   reader = csv.DictReader(f)
                   rows = list(reader)
-                  clusters = len(rows)
-                  if rows:
-                      top = rows[0]
-                      top_title = top['title']
-                      top_score = top['priority_score']
-                      print(f"Found {clusters} clusters, top: {top_title}")
-                  else:
-                      top_title = "N/A"
-                      top_score = "N/A"
-          except Exception as e:
-              print(f"Error reading insights_enriched.csv: {e}")
-              traceback.print_exc()
-              clusters = "N/A"
-              top_title = "N/A"
-              top_score = "N/A"
+                  clusters_count = len(rows)
 
-          # Build Slack payload
-          payload = {
-              "text": "Need Scanner daily run complete!",
-              "blocks": [
+                  # Get top 5 (or all if less than 5)
+                  for i, row in enumerate(rows[:5], 1):
+                      top_clusters.append({
+                          'rank': i,
+                          'title': row['title'],
+                          'score': float(row['priority_score']),
+                          'pain': row.get('pain_score_final', 'N/A'),
+                          'novelty': row.get('novelty_score', 'N/A'),
+                          'trend': row.get('trend_score', 'N/A'),
+                          'size': row.get('size', 'N/A')
+                      })
+                  print(f"Found {clusters_count} clusters")
+          except Exception as e:
+              print(f"Error reading insights: {e}")
+              traceback.print_exc()
+
+          # Build Slack blocks
+          blocks = [
+              {
+                  "type": "header",
+                  "text": {
+                      "type": "plain_text",
+                      "text": "🎯 Need Scanner Daily Results"
+                  }
+              },
+              {
+                  "type": "section",
+                  "fields": [
+                      {
+                          "type": "mrkdwn",
+                          "text": f"*📊 Posts Analyzed*\n{total_posts}"
+                      },
+                      {
+                          "type": "mrkdwn",
+                          "text": f"*🎪 Clusters Found*\n{clusters_count}"
+                      },
+                      {
+                          "type": "mrkdwn",
+                          "text": f"*💰 Total Cost*\n${total_cost}"
+                      },
+                      {
+                          "type": "mrkdwn",
+                          "text": f"*📅 Date*\n{os.path.basename(output_dir)}"
+                      }
+                  ]
+              },
+              {"type": "divider"}
+          ]
+
+          # Add top 5 priorities
+          if top_clusters:
+              blocks.append({
+                  "type": "section",
+                  "text": {
+                      "type": "mrkdwn",
+                      "text": "*🏆 Top 5 Priorities*"
+                  }
+              })
+
+              for cluster in top_clusters:
+                  emoji = "🥇" if cluster['rank'] == 1 else "🥈" if cluster['rank'] == 2 else "🥉" if cluster['rank'] == 3 else "⭐"
+                  blocks.append({
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"{emoji} *#{cluster['rank']} - {cluster['title']}*\n"
+                                  f"Priority: `{cluster['score']:.2f}` | "
+                                  f"Pain: `{cluster['pain']}` | "
+                                  f"Novelty: `{cluster['novelty']}` | "
+                                  f"Trend: `{cluster['trend']}` | "
+                                  f"Size: `{cluster['size']} posts`"
+                      }
+                  })
+
+              blocks.append({"type": "divider"})
+
+          # Add action buttons
+          blocks.append({
+              "type": "actions",
+              "elements": [
                   {
-                      "type": "header",
+                      "type": "button",
                       "text": {
                           "type": "plain_text",
-                          "text": "✅ Need Scanner Daily Scan Complete"
-                      }
+                          "text": "📥 Download CSV"
+                      },
+                      "url": artifact_url,
+                      "style": "primary"
                   },
                   {
-                      "type": "section",
-                      "fields": [
-                          {
-                              "type": "mrkdwn",
-                              "text": f"*Posts Analyzed:*\n{total_posts}"
-                          },
-                          {
-                              "type": "mrkdwn",
-                              "text": f"*Clusters Found:*\n{clusters}"
-                          }
-                      ]
-                  },
-                  {
-                      "type": "section",
+                      "type": "button",
                       "text": {
-                          "type": "mrkdwn",
-                          "text": f"*Top Priority:*\n{top_title} (Score: {top_score})"
-                      }
-                  },
-                  {
-                      "type": "section",
-                      "text": {
-                          "type": "mrkdwn",
-                          "text": f"<{run_url}|View Full Results>"
-                      }
+                          "type": "plain_text",
+                          "text": "🔍 View Logs"
+                      },
+                      "url": run_url
                   }
               ]
+          })
+
+          # Build payload
+          payload = {
+              "text": "Need Scanner daily run complete!",
+              "blocks": blocks
           }
 
           # Send to Slack
