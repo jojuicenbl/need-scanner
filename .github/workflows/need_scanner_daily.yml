@@ -75,6 +75,17 @@ jobs:
             --history-path data/history \
             --output-dir data/daily/$(date +%Y%m%d)
 
+      - name: Verify output files exist
+        run: |
+          echo "Listing data/daily directory:"
+          ls -laR data/daily/
+          echo ""
+          echo "Checking for CSV files:"
+          find data/daily -name "*.csv" -type f || echo "No CSV files found"
+          echo ""
+          echo "Checking for JSON files:"
+          find data/daily -name "*.json" -type f || echo "No JSON files found"
+
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
@@ -83,6 +94,7 @@ jobs:
             data/daily/**/insights_enriched.csv
             data/daily/**/cluster_results.json
           retention-days: 30
+          if-no-files-found: error
 
       # Optional: Commit history files back to repo
       - name: Commit history
@@ -265,10 +277,10 @@ jobs:
               print(f"Slack notification sent: {response.status}")
           EOF
 
-      - name: Cleanup old artifacts
-        uses: geekyeggo/delete-artifact@v5
-        if: success()
-        with:
-          name: daily-insights-*
-          useGlob: true
-          failOnError: false
+      # - name: Cleanup old artifacts
+      #   uses: geekyeggo/delete-artifact@v5
+      #   if: success()
+      #   with:
+      #     name: daily-insights-*
+      #     useGlob: true
+      #     failOnError: false
