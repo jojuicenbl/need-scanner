@@ -86,7 +86,14 @@ Effectue une analyse approfondie et réponds en JSON strict avec les clés suiva
 7) **mvp** : Proposition de MVP (une seule phrase) pour tester rapidement
 8) **alternatives** : Liste des outils/solutions alternatifs mentionnés (array de strings, peut être vide [])
 9) **willingness_to_pay_signal** : Signal de volonté de payer détecté (ex: "mentions frustration with expensive tools", "looking for paid solution", "currently paying for X", ou "" si aucun signal)
-10) **pain_score_llm** : Score de douleur de 1 à 10 (10 = douleur forte, urgente, récurrente)
+10) **pain_score_llm** : Score de douleur de 1 à 10. IMPORTANT : Utilise TOUTE l'échelle 1-10 de manière discriminante :
+    - 1-3 = Inconvénient mineur, pas urgent, workarounds acceptables
+    - 4-6 = Problème réel mais gérable, impact modéré
+    - 7-8 = Douleur forte, impact business significatif, besoin urgent
+    - 9-10 = Douleur critique/exceptionnelle, bloquant majeur (RARE - réserve pour cas vraiment exceptionnels)
+
+    Imagine que tu scores 100 problèmes différents : seuls quelques-uns méritent 9-10. La plupart se situent entre 4-7.
+    Sois EXIGEANT et DISCRIMINANT dans ta notation.
 
 Format JSON attendu :
 {{
@@ -99,7 +106,7 @@ Format JSON attendu :
   "mvp": "...",
   "alternatives": ["tool1", "tool2"],
   "willingness_to_pay_signal": "...",
-  "pain_score_llm": 8
+  "pain_score_llm": 6
 }}
 
 Extraits :

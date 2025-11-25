@@ -51,6 +51,7 @@ class EnrichedClusterSummary(BaseModel):
     alternatives: List[str] = []  # Existing solutions mentioned
     willingness_to_pay_signal: str = ""  # Evidence of WTP
     pain_score_llm: Optional[int] = None
+    sector: Optional[str] = None  # Sector classification (dev_tools, business_pme, etc.)
 
     # Backward compatibility
     @property
@@ -80,6 +81,8 @@ class EnrichedInsight(BaseModel):
     cluster_id: int
     rank: int  # Priority ranking
     priority_score: float  # Final priority score (0-10)
+    priority_score_adjusted: Optional[float] = None  # Priority score adjusted with history penalty
+    mmr_rank: Optional[int] = None  # Rank after MMR reranking
     examples: List[dict]  # subset of meta (id, url, score, comments_count, source)
     summary: EnrichedClusterSummary
     pain_score_final: Optional[int] = None  # Combined LLM + heuristic
