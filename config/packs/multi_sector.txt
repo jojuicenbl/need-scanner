@@ -1,0 +1,97 @@
+# Multi-Sector Pack - Diversified Market Discovery
+# Covers 8 major business sectors for comprehensive market insights
+
+# ═══════════════════════════════════════════════════════════
+# BUSINESS & ENTREPRENEURIAT (business_pme)
+# ═══════════════════════════════════════════════════════════
+freelance
+Entrepreneur
+smallbusiness
+Bootstrapped
+consulting
+entrepreneurfrance
+sweatystartup
+
+# ═══════════════════════════════════════════════════════════
+# TECH & DEV TOOLS (dev_tools)
+# ═══════════════════════════════════════════════════════════
+webdev
+sideproject
+SaaS
+startups
+indiehackers
+devops
+
+# ═══════════════════════════════════════════════════════════
+# AI & LLM (ai_llm)
+# ═══════════════════════════════════════════════════════════
+OpenAI
+ChatGPT
+LocalLLaMA
+artificial
+MachineLearning
+
+# ═══════════════════════════════════════════════════════════
+# SANTÉ & BIEN-ÊTRE (health_wellbeing)
+# ═══════════════════════════════════════════════════════════
+therapy
+healthcare
+mentalhealth
+fitness
+Telemedicine
+
+# ═══════════════════════════════════════════════════════════
+# ÉDUCATION & FORMATION (education_learning)
+# ═══════════════════════════════════════════════════════════
+Teachers
+OnlineEducation
+teaching
+CollegeTransfer
+EdTech
+
+# ═══════════════════════════════════════════════════════════
+# ECOMMERCE & RETAIL (ecommerce_retail)
+# ═══════════════════════════════════════════════════════════
+ecommerce
+shopify
+FoodService
+retailhell
+AmazonSeller
+Etsy
+
+# ═══════════════════════════════════════════════════════════
+# MARKETING & SALES (marketing_sales)
+# ═══════════════════════════════════════════════════════════
+marketing
+sales
+SEO
+PPC
+emailmarketing
+socialmedia
+
+# ═══════════════════════════════════════════════════════════
+# WORKPLACE & HR (workplace_hr)
+# ═══════════════════════════════════════════════════════════
+humanresources
+ITCareerQuestions
+careerguidance
+freelance_forhire
+WorkOnline
+
+# ═══════════════════════════════════════════════════════════
+# FINANCE & ACCOUNTING (finance_accounting)
+# ═══════════════════════════════════════════════════════════
+Accounting
+Bookkeeping
+QuickBooks
+vosfinances
+personalfinance
+
+# ═══════════════════════════════════════════════════════════
+# CONSUMER & LIFESTYLE (consumer_lifestyle)
+# ═══════════════════════════════════════════════════════════
+BuyItForLife
+productivity
+HomeImprovement
+organization
+LifeProTips

@@ -10,7 +10,7 @@ on:
       pack:
         description: 'Subreddit pack to use'
         required: false
-        default: 'smallbiz_fr'
+        default: 'multi_sector'
       reddit_limit:
         description: 'Posts per subreddit'
         required: false
@@ -46,10 +46,11 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python -m need_scanner collect-all \
-            --pack ${{ github.event.inputs.pack || 'smallbiz_fr' }} \
+            --pack ${{ github.event.inputs.pack || 'multi_sector' }} \
             --reddit-limit ${{ github.event.inputs.reddit_limit || '240' }} \
             --reddit-mode hot \
             --hn-days 30 \
+            --rss-feeds-file config/rss_feeds.txt \
             --rss-days 30 \
             --include-keywords-file config/intent_patterns.txt \
             --history-days 45 \
