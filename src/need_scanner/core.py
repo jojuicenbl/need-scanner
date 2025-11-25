@@ -11,7 +11,7 @@ from .schemas import Post, EnrichedInsight
 from .processing.embed import embed_posts
 from .processing.cluster import cluster, get_cluster_data
 from .jobs.enriched_pipeline import run_enriched_pipeline
-from .export.csv_v2 import export_enriched_insights_csv
+from .export.csv_v2 import export_insights_to_csv
 from .export.writer import write_enriched_results_json
 from .db import (
     init_database,
@@ -196,7 +196,7 @@ def run_scan(
 
     # CSV export
     csv_path = output_dir / f"insights_{run_id}.csv"
-    export_enriched_insights_csv(insights, csv_path)
+    export_insights_to_csv(insights, csv_path)
     logger.info(f"   CSV: {csv_path}")
 
     # JSON export
