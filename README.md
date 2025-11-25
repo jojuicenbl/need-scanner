@@ -21,7 +21,13 @@ Transformer des milliers de posts utilisateurs en insights actionnables pour ide
 - ✅ **Founder Fit Score** : Évaluation adéquation opportunité vs profil fondateur (1-10)
 - ✅ **MVP améliorés** : Prompts optimisés pour éviter les "guides PDF" et privilégier vrais produits/services
 
-📖 **Voir documentation** : [docs/ENGINE_IMPROVEMENTS.md](docs/ENGINE_IMPROVEMENTS.md) | [docs/STEP1_ENGINE_IMPROVEMENTS.md](docs/STEP1_ENGINE_IMPROVEMENTS.md)
+### 📚 **NOUVEAU : Lib + Base SQLite (ÉTAPE 2)**
+- ✅ **API Python** : Fonction `run_scan()` réutilisable pour intégration programmatique
+- ✅ **Base SQLite** : Stockage persistant runs & insights (query, filtrage, historique)
+- ✅ **CLI Enrichi** : Commandes `scan`, `list-runs`, `show-insights` pour usage simplifié
+- ✅ **Rétrocompatibilité** : Conservation exports CSV/JSON + anciens scripts
+
+📖 **Voir documentation** : [docs/ENGINE_IMPROVEMENTS.md](docs/ENGINE_IMPROVEMENTS.md) | [docs/STEP1_ENGINE_IMPROVEMENTS.md](docs/STEP1_ENGINE_IMPROVEMENTS.md) | [docs/STEP2_LIB_AND_DATABASE.md](docs/STEP2_LIB_AND_DATABASE.md)
 
 ### 📊 **Analyse Enrichie**
 - **10 champs extraits par insight** : persona, Job-To-Be-Done, contexte, alternatives, signaux WTP, MVP suggéré
@@ -85,7 +91,25 @@ cp .env.example .env
 - Product Hunt API Token
 - Twitter API v2 credentials
 
-## 📖 Guide d'Utilisation Rapide
+## ⚡ Quick Start (NOUVEAU - CLI v2.1)
+
+```bash
+# 1. Collecter des posts
+python -m need_scanner collect-reddit-multi --limit-per-sub 30
+
+# 2. Lancer un scan complet (stockage DB + CSV)
+python -m need_scanner scan --mode deep --max-insights 20
+
+# 3. Voir les résultats
+python -m need_scanner show-insights <RUN_ID>
+
+# 4. Lister l'historique
+python -m need_scanner list-runs
+```
+
+**Nouveauté :** La commande `scan` orchestre tout le pipeline (embeddings, clustering, enrichissement LLM, scoring) et sauvegarde automatiquement dans une base SQLite + génère CSV/JSON.
+
+## 📖 Guide d'Utilisation Détaillé
 
 ### 1. Collecter des Données
 
