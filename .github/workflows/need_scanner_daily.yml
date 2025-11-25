@@ -64,16 +64,11 @@ jobs:
             --keep-intents pain,request \
             --detect-wtp
 
-      - name: Run pipeline
+      - name: Run pipeline v2.0
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python -m need_scanner run \
-            --clusters 12 \
-            --novelty-weight 0.15 \
-            --trend-weight 0.15 \
-            --history-path data/history \
-            --output-dir data/daily/$(date +%Y%m%d)
+          python scripts/run_github_actions_v2.py
 
       - name: Verify output files exist
         run: |
@@ -148,9 +143,10 @@ jobs:
           except:
               total_cost = "N/A"
 
-          # Extract top clusters
+          # Extract top clusters (v2.0 format)
           top_clusters = []
           clusters_count = "N/A"
+          sectors_stats = {}
           try:
               csv_path = f'{output_dir}/insights_enriched.csv'
               with open(csv_path, 'r', encoding='utf-8') as f:
@@ -158,18 +154,26 @@ jobs:
                   rows = list(reader)
                   clusters_count = len(rows)
 
+                  # Count sectors
+                  for row in rows:
+                      sector = row.get('sector', 'other')
+                      sectors_stats[sector] = sectors_stats.get(sector, 0) + 1
+
                   # Get top 5 (or all if less than 5)
                   for i, row in enumerate(rows[:5], 1):
                       top_clusters.append({
                           'rank': i,
+                          'mmr_rank': row.get('mmr_rank', 'N/A'),
                           'title': row['title'],
+                          'sector': row.get('sector', 'other'),
                           'score': float(row['priority_score']),
+                          'score_adjusted': float(row.get('priority_score_adjusted', row['priority_score'])),
                           'pain': row.get('pain_score_final', 'N/A'),
                           'novelty': row.get('novelty_score', 'N/A'),
                           'trend': row.get('trend_score', 'N/A'),
                           'size': row.get('size', 'N/A')
                       })
-                  print(f"Found {clusters_count} clusters")
+                  print(f"Found {clusters_count} clusters across {len(sectors_stats)} sectors")
           except Exception as e:
               print(f"Error reading insights: {e}")
               traceback.print_exc()
@@ -207,28 +211,60 @@ jobs:
               {"type": "divider"}
           ]
 
-          # Add top 5 priorities
+          # Add sector diversity info (v2.0 feature)
+          if sectors_stats:
+              sectors_text = " | ".join([f"{sector}: {count}" for sector, count in sorted(sectors_stats.items())[:5]])
+              blocks.append({
+                  "type": "section",
+                  "text": {
+                      "type": "mrkdwn",
+                      "text": f"*🎨 Sector Diversity (v2.0)*\n{sectors_text}"
+                  }
+              })
+              blocks.append({"type": "divider"})
+
+          # Add top 5 priorities (v2.0 format)
           if top_clusters:
               blocks.append({
                   "type": "section",
                   "text": {
                       "type": "mrkdwn",
-                      "text": "*🏆 Top 5 Priorities*"
+                      "text": "*🏆 Top 5 Priorities (MMR Ranked)*"
                   }
               })
 
+              # Sector emojis
+              sector_emojis = {
+                  'dev_tools': '💻',
+                  'ai_llm': '🤖',
+                  'business_pme': '💼',
+                  'health_wellbeing': '🏥',
+                  'education_learning': '📚',
+                  'ecommerce_retail': '🛒',
+                  'marketing_sales': '📊',
+                  'creator_economy': '🎨',
+                  'workplace_hr': '👔',
+                  'finance_accounting': '💰',
+                  'legal_compliance': '⚖️',
+                  'consumer_lifestyle': '🏠',
+                  'other': '📌'
+              }
+
               for cluster in top_clusters:
                   emoji = "🥇" if cluster['rank'] == 1 else "🥈" if cluster['rank'] == 2 else "🥉" if cluster['rank'] == 3 else "⭐"
+                  sector_emoji = sector_emojis.get(cluster['sector'], '📌')
+
                   blocks.append({
                       "type": "section",
                       "text": {
                           "type": "mrkdwn",
-                          "text": f"{emoji} *#{cluster['rank']} - {cluster['title']}*\n"
-                                  f"Priority: `{cluster['score']:.2f}` | "
+                          "text": f"{emoji} *#{cluster['rank']} {sector_emoji} [{cluster['sector']}] - {cluster['title']}*\n"
+                                  f"Priority: `{cluster['score']:.2f}` → `{cluster['score_adjusted']:.2f}` (adjusted) | "
+                                  f"MMR: `#{cluster['mmr_rank']}` | "
                                   f"Pain: `{cluster['pain']}` | "
                                   f"Novelty: `{cluster['novelty']}` | "
                                   f"Trend: `{cluster['trend']}` | "
-                                  f"Size: `{cluster['size']} posts`"
+                                  f"Size: `{cluster['size']}`"
                       }
                   })
 
@@ -240,7 +276,8 @@ jobs:
               "text": {
                   "type": "mrkdwn",
                   "text": "💡 *How to download full results:*\n"
-                          "Click the button below → Scroll to *Artifacts* section → Download `daily-insights-XXX.zip`"
+                          "Click the button below → Scroll to *Artifacts* section → Download `daily-insights-XXX.zip`\n\n"
+                          "_✨ Powered by Need Scanner v2.0 - Multi-sector, MMR ranking, history-based deduplication_"
               }
           })
 

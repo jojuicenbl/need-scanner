@@ -23,7 +23,12 @@ class Config(BaseSettings):
 
     # Model configuration
     ns_embed_model: str = "text-embedding-3-small"
-    ns_summary_model: str = "gpt-4o-mini"
+
+    # Light model: for simple tasks (sector tagging, intent classification)
+    ns_light_model: str = "gpt-4o-mini"
+
+    # Heavy model: for complex enrichment (persona, JTBD, scoring)
+    ns_heavy_model: str = "gpt-4o"
 
     # Clustering
     ns_num_clusters: int = 10
@@ -32,6 +37,17 @@ class Config(BaseSettings):
     ns_max_docs_per_cluster: int = 6
     ns_max_input_tokens_per_prompt: int = 1200
     ns_max_output_tokens: int = 400
+
+    # TOP K enrichment: only enrich top K clusters with heavy model
+    ns_top_k_enrichment: int = 5
+
+    # History & deduplication
+    ns_history_retention_days: int = 30  # Keep history for N days
+    ns_history_penalty_factor: float = 0.3  # Similarity penalty strength (0-1)
+
+    # MMR reranking
+    ns_mmr_lambda: float = 0.7  # Balance relevance vs diversity (0-1)
+    ns_mmr_top_k: int = 10  # Number of items to select with MMR
 
     # Cost controls
     ns_cost_warn_prompt_usd: float = 0.50
@@ -60,6 +76,10 @@ PRICING = {
     "gpt-4o-mini": {
         "input": 0.00015,
         "output": 0.0006
+    },
+    "gpt-4o": {
+        "input": 0.0025,
+        "output": 0.01
     },
     "gpt-3.5-turbo": {
         "input": 0.0005,

@@ -1,0 +1,225 @@
+# Configuration des sources multi-secteurs pour Need Scanner
+# Format YAML pour faciliter la gestion des catégories
+
+reddit_sources:
+  # ═══════════════════════════════════════════════════════════
+  # BUSINESS & ENTREPRENEURIAT
+  # ═══════════════════════════════════════════════════════════
+  - name: freelance
+    category: business_pme
+    max_posts: 40
+
+  - name: Entrepreneur
+    category: business_pme
+    max_posts: 40
+
+  - name: smallbusiness
+    category: business_pme
+    max_posts: 40
+
+  - name: Bootstrapped
+    category: business_pme
+    max_posts: 30
+
+  # ═══════════════════════════════════════════════════════════
+  # TECH & DEV (limité)
+  # ═══════════════════════════════════════════════════════════
+  - name: webdev
+    category: dev_tools
+    max_posts: 30
+
+  - name: sideproject
+    category: dev_tools
+    max_posts: 30
+
+  - name: SaaS
+    category: dev_tools
+    max_posts: 30
+
+  - name: startups
+    category: dev_tools
+    max_posts: 30
+
+  # ═══════════════════════════════════════════════════════════
+  # SANTÉ & BIEN-ÊTRE
+  # ═══════════════════════════════════════════════════════════
+  - name: therapy
+    category: health_wellbeing
+    max_posts: 30
+
+  - name: healthcare
+    category: health_wellbeing
+    max_posts: 30
+
+  - name: mentalhealth
+    category: health_wellbeing
+    max_posts: 30
+
+  # ═══════════════════════════════════════════════════════════
+  # ÉDUCATION & FORMATION
+  # ═══════════════════════════════════════════════════════════
+  - name: Teachers
+    category: education_learning
+    max_posts: 30
+
+  - name: OnlineEducation
+    category: education_learning
+    max_posts: 30
+
+  # ═══════════════════════════════════════════════════════════
+  # RETAIL & RESTAURATION
+  # ═══════════════════════════════════════════════════════════
+  - name: FoodService
+    category: ecommerce_retail
+    max_posts: 30
+
+  - name: retailhell
+    category: ecommerce_retail
+    max_posts: 30
+
+  - name: smallbusinessuk
+    category: business_pme
+    max_posts: 30
+
+  # ═══════════════════════════════════════════════════════════
+  # MARKETING & SALES
+  # ═══════════════════════════════════════════════════════════
+  - name: marketing
+    category: marketing_sales
+    max_posts: 30
+
+  - name: sales
+    category: marketing_sales
+    max_posts: 30
+
+  # ═══════════════════════════════════════════════════════════
+  # SERVICES PROFESSIONNELS
+  # ═══════════════════════════════════════════════════════════
+  - name: consulting
+    category: workplace_hr
+    max_posts: 25
+
+  - name: Bookkeeping
+    category: finance_accounting
+    max_posts: 25
+
+  - name: legaladvice
+    category: legal_compliance
+    max_posts: 25
+
+  # ═══════════════════════════════════════════════════════════
+  # CRÉATEURS & ARTISANS
+  # ═══════════════════════════════════════════════════════════
+  - name: Etsy
+    category: creator_economy
+    max_posts: 30
+
+  - name: ArtisanVideos
+    category: creator_economy
+    max_posts: 25
+
+  - name: Handmade
+    category: creator_economy
+    max_posts: 25
+
+  # ═══════════════════════════════════════════════════════════
+  # FRANCE & LIFESTYLE
+  # ═══════════════════════════════════════════════════════════
+  - name: france
+    category: consumer_lifestyle
+    max_posts: 30
+
+  - name: vosfinances
+    category: finance_accounting
+    max_posts: 25
+
+  - name: besoindeparler
+    category: health_wellbeing
+    max_posts: 25
+
+
+stackexchange_sources:
+  # ═══════════════════════════════════════════════════════════
+  # TECH & DEV
+  # ═══════════════════════════════════════════════════════════
+  - site: stackoverflow
+    category: dev_tools
+    max_posts: 40
+
+  - site: softwareengineering
+    category: dev_tools
+    max_posts: 30
+
+  - site: webmasters
+    category: dev_tools
+    max_posts: 25
+
+  - site: devops
+    category: dev_tools
+    max_posts: 25
+
+  # ═══════════════════════════════════════════════════════════
+  # BUSINESS & PROFESSIONNEL
+  # ═══════════════════════════════════════════════════════════
+  - site: startups
+    category: business_pme
+    max_posts: 30
+
+  - site: workplace
+    category: workplace_hr
+    max_posts: 30
+
+  - site: freelancing
+    category: business_pme
+    max_posts: 30
+
+  - site: money
+    category: finance_accounting
+    max_posts: 25
+
+  - site: productivity
+    category: workplace_hr
+    max_posts: 25
+
+  # ═══════════════════════════════════════════════════════════
+  # AUTRES SECTEURS
+  # ═══════════════════════════════════════════════════════════
+  - site: ux
+    category: dev_tools
+    max_posts: 25
+
+  - site: pm
+    category: workplace_hr
+    max_posts: 20
+
+  - site: marketing
+    category: marketing_sales
+    max_posts: 20
+
+  - site: academia
+    category: education_learning
+    max_posts: 20
+
+  - site: travel
+    category: consumer_lifestyle
+    max_posts: 15
+
+  - site: diy
+    category: consumer_lifestyle
+    max_posts: 15
+
+
+# Quotas par catégorie (pour équilibrage)
+category_quotas:
+  business_pme: 150
+  dev_tools: 150
+  health_wellbeing: 80
+  education_learning: 60
+  ecommerce_retail: 60
+  marketing_sales: 60
+  workplace_hr: 60
+  finance_accounting: 50
+  legal_compliance: 30
+  creator_economy: 60
+  consumer_lifestyle: 60
+  other: 40

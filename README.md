@@ -8,6 +8,16 @@ Transformer des milliers de posts utilisateurs en insights actionnables pour ide
 
 ## ✨ Fonctionnalités
 
+### 🚀 **NOUVEAU : Améliorations Moteur (v2.0)**
+- ✅ **Configuration Multi-Modèle** : gpt-4o pour TOP K, gpt-4o-mini pour le reste (optimisation coûts)
+- ✅ **Tags Sectoriels** : Classification automatique en 13 secteurs (dev_tools, business_pme, health_wellbeing, etc.)
+- ✅ **MMR Reranking** : Sélection diversifiée des TOP N clusters (pertinence + diversité)
+- ✅ **Mémoire Inter-Jour** : Pénalité automatique des clusters similaires à l'historique
+- ✅ **Scoring Discriminant** : Prompts améliorés pour des scores pain/novelty/trend plus expressifs
+- ✅ **Sources Multi-Secteur** : Configuration YAML avec catégories et quotas par secteur
+
+📖 **Voir documentation complète** : [docs/ENGINE_IMPROVEMENTS.md](docs/ENGINE_IMPROVEMENTS.md)
+
 ### 📊 **Analyse Enrichie**
 - **10 champs extraits par insight** : persona, Job-To-Be-Done, contexte, alternatives, signaux WTP, MVP suggéré
 - **Priority scoring** : Formule multi-composantes (Pain 30% + Traction 25% + Novelty 20% + WTP 15%)
@@ -284,9 +294,17 @@ Ce projet a été développé avec Claude Code. Pour contribuer :
 - ✅ Export CSV 20 colonnes
 - ✅ Détection WTP FR/EN
 
+**v2.0 - Améliorations Moteur** (2025-01) :
+- ✅ Configuration multi-modèle (light/heavy)
+- ✅ Tags sectoriels automatiques
+- ✅ MMR reranking pour diversité
+- ✅ Mémoire inter-jour (historique)
+- ✅ Scoring plus discriminant
+- ✅ Sources multi-secteur équilibrées
+
 **À venir** :
 - [ ] Dashboard web interactif
-- [ ] Notifications Slack/Discord
+- [ ] Notifications Slack/Discord enrichies
 - [ ] Support App Store reviews
 - [ ] Intégration Docker
 - [ ] CI/CD pipeline
