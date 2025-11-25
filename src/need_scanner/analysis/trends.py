@@ -1,4 +1,4 @@
-"""Trend analysis - detect emerging topics via week-over-week growth."""
+"""Trend analysis - detect emerging topics via week-over-week growth and LLM market trend assessment."""
 
 import time
 from typing import Dict, List, Optional
@@ -7,6 +7,7 @@ from pathlib import Path
 import json
 import numpy as np
 from loguru import logger
+from openai import OpenAI
 
 
 def sigmoid(x: float) -> float:
@@ -185,3 +186,211 @@ def calculate_post_recency_score(
 
     avg_recency = sum(recency_scores) / len(recency_scores)
     return round(avg_recency * 10.0, 1)
+
+
+def calculate_llm_trend_score(
+    cluster_title: str,
+    cluster_problem: str,
+    cluster_sector: Optional[str],
+    model: str,
+    api_key: str,
+    max_retries: int = 2
+) -> Optional[float]:
+    """
+    Calculate trend score using LLM to assess market momentum.
+
+    Evaluates if the problem/need is growing in the market based on:
+    - Emergence of new tools/solutions in this space
+    - Technology evolution (AI, automation, etc.)
+    - Market shifts (remote work, privacy concerns, etc.)
+    - Social/media buzz
+
+    Args:
+        cluster_title: Short title of the problem
+        cluster_problem: Problem description
+        cluster_sector: Sector classification (optional)
+        model: LLM model name (recommend gpt-4o-mini for cost)
+        api_key: OpenAI API key
+        max_retries: Maximum retry attempts
+
+    Returns:
+        Trend score (1.0 to 10.0) or None if failed
+    """
+    system_prompt = """Tu es un analyste de tendances marché qui évalue la dynamique de croissance des besoins utilisateurs.
+Réponds uniquement en JSON strict avec un score de tendance."""
+
+    user_prompt = f"""Évalue la TENDANCE MARCHÉ de ce problème utilisateur :
+
+Titre : {cluster_title}
+Problème : {cluster_problem}
+Secteur : {cluster_sector or 'Non spécifié'}
+
+Score de tendance (1-10) basé sur :
+- **Émergence** : De nouveaux outils/solutions apparaissent dans cet espace ?
+- **Tech evolution** : Technologies facilitantes (AI, automation, no-code) rendent la solution plus accessible ?
+- **Market shifts** : Changements macro (remote work, privacy, coûts) augmentent le besoin ?
+- **Buzz** : Le sujet génère de l'attention médias/réseaux sociaux ?
+
+Échelle DISCRIMINANTE (utilise TOUTE l'échelle 1-10) :
+- 1-3 : Tendance décroissante, marché saturé ou en déclin
+- 4-6 : Stable, croissance modérée ou incertaine
+- 7-8 : Croissance nette, momentum visible
+- 9-10 : Forte croissance / hype (RARE - réserve pour vrais phénomènes émergents)
+
+Sois EXIGEANT : la plupart des problèmes sont entre 4-7. Seuls les vrais sujets émergents méritent 8+.
+
+Réponds UNIQUEMENT en JSON strict :
+{{"trend_score": 6, "justification": "Une phrase expliquant le score"}}"""
+
+    client = OpenAI(api_key=api_key)
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=150,
+                temperature=0.7
+            )
+
+            response_text = response.choices[0].message.content
+
+            # Parse JSON
+            try:
+                data = json.loads(response_text)
+            except json.JSONDecodeError:
+                # Try to extract from markdown
+                if "```json" in response_text:
+                    start = response_text.find("```json") + 7
+                    end = response_text.find("```", start)
+                    json_str = response_text[start:end].strip()
+                    data = json.loads(json_str)
+                elif "```" in response_text:
+                    start = response_text.find("```") + 3
+                    end = response_text.find("```", start)
+                    json_str = response_text[start:end].strip()
+                    data = json.loads(json_str)
+                else:
+                    raise
+
+            if "trend_score" not in data:
+                logger.warning(f"Missing trend_score in LLM response")
+                if attempt < max_retries:
+                    time.sleep(1)
+                    continue
+                return None
+
+            trend_score = float(data["trend_score"])
+            justification = data.get("justification", "")
+
+            # Clamp to 1-10
+            trend_score = max(1.0, min(10.0, trend_score))
+
+            logger.debug(f"LLM Trend: {trend_score:.1f} - {justification}")
+            return trend_score
+
+        except Exception as e:
+            if attempt < max_retries:
+                wait_time = 2 ** attempt
+                logger.warning(f"LLM trend scoring error (attempt {attempt + 1}/{max_retries + 1}): {e}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"Failed to calculate LLM trend score after {max_retries + 1} attempts: {e}")
+                return None
+
+    return None
+
+
+def calculate_hybrid_trend_score(
+    cluster_data: Dict[int, List[dict]],
+    cluster_summaries: Dict[int, dict],
+    history_path: Optional[Path] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    use_llm: bool = True,
+    llm_weight: float = 0.7
+) -> Dict[int, float]:
+    """
+    Calculate hybrid trend scores combining historical growth + LLM market assessment.
+
+    Args:
+        cluster_data: Dict mapping cluster_id to list of post metadata
+        cluster_summaries: Dict mapping cluster_id to summary dict (title, problem, sector)
+        history_path: Path to historical cluster data (optional)
+        model: LLM model for trend assessment (optional, needed if use_llm=True)
+        api_key: OpenAI API key (optional, needed if use_llm=True)
+        use_llm: Whether to use LLM scoring (default True)
+        llm_weight: Weight for LLM score vs historical (default 0.7)
+
+    Returns:
+        Dict mapping cluster_id to hybrid trend_score (1.0 to 10.0)
+    """
+    logger.info("Calculating hybrid trend scores...")
+
+    # Calculate historical growth scores
+    historical_scores = calculate_cluster_trends(
+        cluster_data=cluster_data,
+        history_path=history_path,
+        weeks_lookback=4
+    )
+
+    # If LLM not enabled, return historical only
+    if not use_llm or not model or not api_key:
+        logger.info("Using historical trend scores only (LLM disabled)")
+        return historical_scores
+
+    # Calculate LLM market trend scores
+    logger.info("Calculating LLM market trend scores...")
+    hybrid_scores = {}
+
+    for cluster_id in cluster_data.keys():
+        historical_score = historical_scores.get(cluster_id, 5.0)
+
+        # Get cluster summary info
+        summary = cluster_summaries.get(cluster_id)
+        if not summary:
+            logger.warning(f"Cluster {cluster_id}: No summary found, using historical score only")
+            hybrid_scores[cluster_id] = historical_score
+            continue
+
+        # Calculate LLM trend
+        llm_score = calculate_llm_trend_score(
+            cluster_title=summary.get("title", ""),
+            cluster_problem=summary.get("problem", summary.get("description", "")),
+            cluster_sector=summary.get("sector"),
+            model=model,
+            api_key=api_key
+        )
+
+        if llm_score is None:
+            logger.warning(f"Cluster {cluster_id}: LLM scoring failed, using historical score only")
+            hybrid_scores[cluster_id] = historical_score
+        else:
+            # Combine scores
+            # Historical is 0-10, normalize to 1-10 first
+            normalized_historical = max(1.0, historical_score)
+            combined = llm_weight * llm_score + (1 - llm_weight) * normalized_historical
+            hybrid_scores[cluster_id] = round(combined, 1)
+
+            logger.info(
+                f"Cluster {cluster_id}: Trend={hybrid_scores[cluster_id]:.1f} "
+                f"(LLM={llm_score:.1f} @ {llm_weight*100:.0f}%, hist={normalized_historical:.1f})"
+            )
+
+        # Small delay to avoid rate limits
+        time.sleep(0.3)
+
+    logger.info(f"Calculated hybrid trends for {len(hybrid_scores)} clusters")
+
+    # Show top trending
+    sorted_trends = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)
+    logger.info("Top 5 trending clusters (hybrid):")
+    for cluster_id, score in sorted_trends[:5]:
+        summary = cluster_summaries.get(cluster_id, {})
+        title = summary.get("title", f"Cluster {cluster_id}")
+        logger.info(f"  {title}: {score:.1f}")
+
+    return hybrid_scores

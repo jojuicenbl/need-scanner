@@ -16,11 +16,17 @@ Transformer des milliers de posts utilisateurs en insights actionnables pour ide
 - ✅ **Scoring Discriminant** : Prompts améliorés pour des scores pain/novelty/trend plus expressifs
 - ✅ **Sources Multi-Secteur** : Configuration YAML avec catégories et quotas par secteur
 
-📖 **Voir documentation complète** : [docs/ENGINE_IMPROVEMENTS.md](docs/ENGINE_IMPROVEMENTS.md)
+### 🎯 **NOUVEAU : Améliorations ÉTAPE 1 (2025-11)**
+- ✅ **Trend Score LLM** : Score hybride marché (70% analyse LLM + 30% croissance historique)
+- ✅ **Founder Fit Score** : Évaluation adéquation opportunité vs profil fondateur (1-10)
+- ✅ **MVP améliorés** : Prompts optimisés pour éviter les "guides PDF" et privilégier vrais produits/services
+
+📖 **Voir documentation** : [docs/ENGINE_IMPROVEMENTS.md](docs/ENGINE_IMPROVEMENTS.md) | [docs/STEP1_ENGINE_IMPROVEMENTS.md](docs/STEP1_ENGINE_IMPROVEMENTS.md)
 
 ### 📊 **Analyse Enrichie**
 - **10 champs extraits par insight** : persona, Job-To-Be-Done, contexte, alternatives, signaux WTP, MVP suggéré
-- **Priority scoring** : Formule multi-composantes (Pain 30% + Traction 25% + Novelty 20% + WTP 15%)
+- **Priority scoring** : Formule multi-composantes (Pain 30% + Traction 25% + Novelty 15% + WTP 20% + Trend 10%)
+- **Founder Fit scoring** : Signal complémentaire pour filtrage personnel (1-10)
 - **Détection WTP** : 7 types de signaux de volonté de payer (FR/EN)
 - **Classification intent** : 6 types (pain, request, howto, promo, news, other)
 - **Support multilingue** : Détection de 23+ langues

@@ -83,7 +83,13 @@ Effectue une analyse approfondie et réponds en JSON strict avec les clés suiva
 4) **jtbd** : Job-To-Be-Done au format "Quand [situation], je veux [progrès], afin de [résultat]"
 5) **context** : Contexte d'usage en 1-2 phrases : outils actuels, contraintes, fréquence du besoin
 6) **monetizable** : true/false
-7) **mvp** : Proposition de MVP (une seule phrase) pour tester rapidement
+7) **mvp** : Proposition de MVP (une seule phrase) pour tester rapidement. IMPORTANT :
+   - ❌ ÉVITE : "guides PDF", "articles de blog", "ressources statiques", "templates à télécharger", "e-books"
+   - ✅ PRIVILÉGIE : outils SaaS simples, scripts/automations, extensions navigateur, dashboards interactifs, APIs, calculateurs en ligne, assistants/bots, micro-services
+   - Pense "produit/service qu'un dev fullstack solo peut construire en quelques semaines"
+   - Format : "Construire [un outil/service concret] qui [action/valeur créée]"
+   - Exemple BON : "Construire un script Python qui génère automatiquement des rapports financiers depuis Stripe"
+   - Exemple MAUVAIS : "Créer un guide PDF expliquant comment faire des rapports financiers"
 8) **alternatives** : Liste des outils/solutions alternatifs mentionnés (array de strings, peut être vide [])
 9) **willingness_to_pay_signal** : Signal de volonté de payer détecté (ex: "mentions frustration with expensive tools", "looking for paid solution", "currently paying for X", ou "" si aucun signal)
 10) **pain_score_llm** : Score de douleur de 1 à 10. IMPORTANT : Utilise TOUTE l'échelle 1-10 de manière discriminante :

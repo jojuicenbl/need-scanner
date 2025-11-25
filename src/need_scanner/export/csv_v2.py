@@ -59,6 +59,7 @@ def export_insights_to_csv(
         'traction_score',
         'novelty_score',
         'trend_score',
+        'founder_fit_score',
 
         # Examples
         'example_urls',
@@ -117,6 +118,7 @@ def export_insights_to_csv(
                 'traction_score': f"{insight.traction_score:.1f}" if insight.traction_score else '',
                 'novelty_score': f"{insight.novelty_score:.1f}" if insight.novelty_score else '',
                 'trend_score': f"{insight.trend_score:.1f}" if insight.trend_score else '',
+                'founder_fit_score': f"{insight.founder_fit_score:.1f}" if insight.founder_fit_score else '',
 
                 # Examples
                 'example_urls': example_urls,
