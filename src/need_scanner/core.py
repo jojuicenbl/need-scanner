@@ -12,7 +12,7 @@ from .processing.embed import embed_posts
 from .processing.cluster import cluster, get_cluster_data
 from .jobs.enriched_pipeline import run_enriched_pipeline
 from .export.csv_v2 import export_insights_to_csv
-from .export.writer import write_enriched_results_json
+from .export.writer import write_enriched_cluster_results
 from .db import (
     init_database,
     generate_run_id,
@@ -212,7 +212,7 @@ def run_scan(
         'summary_cost_usd': summary_cost,
         'total_cost_usd': total_cost
     }
-    write_enriched_results_json(json_path, insights, stats_dict)
+    write_enriched_cluster_results(json_path, insights, stats_dict)
     logger.info(f"   JSON: {json_path}")
 
     # ========================================================================
