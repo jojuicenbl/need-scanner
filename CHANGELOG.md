@@ -5,6 +5,90 @@ All notable changes to the Need Scanner project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2025-11-26
+
+### 🌐 FastAPI Backend (STEP 3)
+
+#### Added
+
+**FastAPI REST API**
+- New `src/need_scanner/api.py` module with complete FastAPI application
+- 8 endpoints for full API coverage:
+  - `GET /` - API information
+  - `GET /health` - Health check
+  - `POST /runs` - Create new scan
+  - `GET /runs` - List recent runs
+  - `GET /runs/{run_id}/insights` - Get insights for a run (with filters)
+  - `GET /insights/{insight_id}` - Get insight details
+  - `POST /insights/{insight_id}/explore` - Deep exploration with heavy LLM
+  - `GET /insights/{insight_id}/explorations` - List explorations
+- Automatic Swagger UI documentation at `/docs`
+- ReDoc documentation at `/redoc`
+- Pydantic models for request/response validation
+- Comprehensive error handling (400, 404, 500)
+
+**LLM Utility Module**
+- New `src/need_scanner/llm.py` module for LLM operations
+- `call_llm()` - Generic LLM API call with cost calculation
+- `explore_insight_with_llm()` - Deep insight exploration function
+- Structured exploration with sections:
+  - Market analysis
+  - 2-3 monetization hypotheses
+  - 2-3 product variants (MVP to ambitious)
+  - 3 concrete validation steps
+- Automatic cost tracking for all LLM calls
+
+**Database Extensions**
+- New `insight_explorations` table for storing deep explorations
+- Fields: id, insight_id, created_at, model_used, exploration_text, monetization_hypotheses, product_variants, validation_steps
+- New DB functions in `db.py`:
+  - `get_insight_by_id()` - Retrieve single insight
+  - `save_exploration()` - Save exploration results
+  - `get_explorations_for_insight()` - List explorations for an insight
+- Index on `insight_id` for fast lookups
+
+**Testing**
+- New `tests/test_api.py` with integration tests
+- Tests for all endpoints (root, health, runs, insights, exploration)
+- Request validation tests
+- Query parameter tests
+- Full workflow integration test (marked as skipped by default)
+- Using FastAPI TestClient for HTTP testing
+
+**Documentation**
+- New `docs/STEP3_HTTP_API.md` - Comprehensive API documentation
+  - Complete endpoint reference
+  - Usage examples with curl
+  - Python requests examples
+  - Configuration guide
+  - Testing guide
+  - Deployment considerations
+- Updated README.md with:
+  - FastAPI quick start section
+  - API endpoint table
+  - Example curl commands
+  - Project structure updates
+  - Roadmap updates
+
+**Scripts & Tools**
+- `start_api.sh` - Convenience script to launch the API server
+- Updated `requirements.txt` with fastapi>=0.104.0, uvicorn>=0.24.0, pytest>=7.0.0
+
+#### Changed
+
+- Updated README to version 3.0.0
+- Enhanced project structure documentation
+- Added API usage to Quick Start guide
+
+#### Technical Details
+
+- FastAPI 0.122.0
+- Uvicorn 0.38.0 for ASGI server
+- Pydantic v2 for data validation
+- SQLite for persistence
+- OpenAI API integration for LLM exploration
+- Support for both gpt-4o-mini (light) and gpt-4o (heavy) models
+
 ## [2.0.0] - 2025-01-25
 
 ### 🚀 Major Engine Improvements

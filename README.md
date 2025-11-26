@@ -27,7 +27,13 @@ Transformer des milliers de posts utilisateurs en insights actionnables pour ide
 - ✅ **CLI Enrichi** : Commandes `scan`, `list-runs`, `show-insights` pour usage simplifié
 - ✅ **Rétrocompatibilité** : Conservation exports CSV/JSON + anciens scripts
 
-📖 **Voir documentation** : [docs/ENGINE_IMPROVEMENTS.md](docs/ENGINE_IMPROVEMENTS.md) | [docs/STEP1_ENGINE_IMPROVEMENTS.md](docs/STEP1_ENGINE_IMPROVEMENTS.md) | [docs/STEP2_LIB_AND_DATABASE.md](docs/STEP2_LIB_AND_DATABASE.md)
+### 🌐 **NOUVEAU : Backend HTTP avec FastAPI (ÉTAPE 3)**
+- ✅ **API REST** : Endpoints HTTP pour lancer des scans et consulter les résultats
+- ✅ **Exploration LLM** : Endpoint dédié pour analyse approfondie d'insights avec modèles lourds
+- ✅ **Base de données** : Table `insight_explorations` pour stocker les analyses détaillées
+- ✅ **Documentation auto** : Swagger UI intégré pour tester l'API interactivement
+
+📖 **Voir documentation** : [docs/ENGINE_IMPROVEMENTS.md](docs/ENGINE_IMPROVEMENTS.md) | [docs/STEP1_ENGINE_IMPROVEMENTS.md](docs/STEP1_ENGINE_IMPROVEMENTS.md) | [docs/STEP2_LIB_AND_DATABASE.md](docs/STEP2_LIB_AND_DATABASE.md) | [docs/STEP3_HTTP_API.md](docs/STEP3_HTTP_API.md)
 
 ### 📊 **Analyse Enrichie**
 - **10 champs extraits par insight** : persona, Job-To-Be-Done, contexte, alternatives, signaux WTP, MVP suggéré
@@ -91,7 +97,9 @@ cp .env.example .env
 - Product Hunt API Token
 - Twitter API v2 credentials
 
-## ⚡ Quick Start (NOUVEAU - CLI v2.1)
+## ⚡ Quick Start
+
+### Option 1 : CLI (v2.1)
 
 ```bash
 # 1. Collecter des posts
@@ -107,7 +115,36 @@ python -m need_scanner show-insights <RUN_ID>
 python -m need_scanner list-runs
 ```
 
-**Nouveauté :** La commande `scan` orchestre tout le pipeline (embeddings, clustering, enrichissement LLM, scoring) et sauvegarde automatiquement dans une base SQLite + génère CSV/JSON.
+### Option 2 : API HTTP (NOUVEAU - v3.0)
+
+```bash
+# 1. Lancer l'API FastAPI
+uvicorn need_scanner.api:app --reload
+
+# 2. Accéder à la documentation interactive
+# Ouvrir http://localhost:8000/docs dans votre navigateur
+
+# 3. Créer un nouveau scan via HTTP
+curl -X POST "http://localhost:8000/runs" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "deep", "max_insights": 20}'
+
+# 4. Lister les runs
+curl "http://localhost:8000/runs?limit=10"
+
+# 5. Voir les insights d'un run
+curl "http://localhost:8000/runs/{RUN_ID}/insights"
+
+# 6. Explorer un insight en profondeur
+curl -X POST "http://localhost:8000/insights/{INSIGHT_ID}/explore" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-4o"}'
+```
+
+**Nouveautés v3.0 :**
+- **API REST complète** avec FastAPI
+- **Exploration LLM** : Analyse approfondie à la demande avec modèles lourds
+- **Documentation interactive** : Swagger UI pour tester tous les endpoints
 
 ## 📖 Guide d'Utilisation Détaillé
 
@@ -161,6 +198,53 @@ python -m need_scanner run --input "data/raw/posts_*.json" --clusters 5 --output
 ### 4. Exporter en CSV
 
 Les résultats JSON peuvent être convertis en CSV enrichi (20 colonnes) avec les scripts fournis.
+
+### 5. Utiliser l'API HTTP (NOUVEAU)
+
+**Lancer le serveur** :
+```bash
+uvicorn need_scanner.api:app --reload --host 0.0.0.0 --port 8000
+```
+
+**Endpoints disponibles** :
+
+| Méthode | Endpoint | Description |
+|---------|----------|-------------|
+| GET | `/` | Informations de l'API |
+| GET | `/health` | Health check |
+| POST | `/runs` | Créer un nouveau scan |
+| GET | `/runs` | Lister les runs récents |
+| GET | `/runs/{run_id}/insights` | Insights d'un run |
+| GET | `/insights/{insight_id}` | Détails d'un insight |
+| POST | `/insights/{insight_id}/explore` | Explorer un insight en profondeur |
+| GET | `/insights/{insight_id}/explorations` | Historique des explorations |
+
+**Documentation interactive** :
+- Swagger UI : `http://localhost:8000/docs`
+- ReDoc : `http://localhost:8000/redoc`
+
+**Exemples d'utilisation** :
+
+```bash
+# Créer un scan
+curl -X POST "http://localhost:8000/runs" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "deep", "max_insights": 15}'
+
+# Lister les runs
+curl "http://localhost:8000/runs?limit=5"
+
+# Voir les insights (avec filtres)
+curl "http://localhost:8000/runs/20251126_143022/insights?sector=dev_tools&min_priority=6.0"
+
+# Explorer un insight avec GPT-4o
+curl -X POST "http://localhost:8000/insights/20251126_143022_cluster_1/explore" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-4o"}'
+
+# Voir l'historique d'exploration
+curl "http://localhost:8000/insights/20251126_143022_cluster_1/explorations"
+```
 
 ## 📊 Exemple de Résultat
 
@@ -259,6 +343,10 @@ need_scanner/
 │   │   └── cluster.py     # Clustering
 │   ├── export/            # Export des résultats
 │   │   └── writer.py      # JSON + CSV
+│   ├── api.py             # FastAPI backend (NOUVEAU)
+│   ├── llm.py             # LLM utilities (NOUVEAU)
+│   ├── db.py              # SQLite database
+│   ├── core.py            # Core pipeline
 │   └── cli.py             # Interface CLI
 ├── config/                # Fichiers de configuration
 │   ├── reddit_subs.txt    # Liste de subreddits
@@ -332,9 +420,18 @@ Ce projet a été développé avec Claude Code. Pour contribuer :
 - ✅ Scoring plus discriminant
 - ✅ Sources multi-secteur équilibrées
 
+**v3.0 - Backend HTTP FastAPI** (2025-11) :
+- ✅ API REST complète avec tous les endpoints
+- ✅ Exploration LLM à la demande
+- ✅ Table insight_explorations
+- ✅ Documentation Swagger/ReDoc
+- ✅ Gestion erreurs et validation
+
 **À venir** :
-- [ ] Dashboard web interactif
-- [ ] Notifications Slack/Discord enrichies
+- [ ] Tests d'intégration API
+- [ ] Dashboard web interactif (React/Vue)
+- [ ] Authentification et multi-utilisateurs
+- [ ] Webhooks et notifications
 - [ ] Support App Store reviews
 - [ ] Intégration Docker
 - [ ] CI/CD pipeline

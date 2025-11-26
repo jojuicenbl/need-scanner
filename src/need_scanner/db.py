@@ -101,6 +101,21 @@ def init_database(db_path: Optional[Path] = None) -> None:
         )
     """)
 
+    # Create insight_explorations table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS insight_explorations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            insight_id TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            model_used TEXT,
+            exploration_text TEXT NOT NULL,
+            monetization_hypotheses TEXT,
+            product_variants TEXT,
+            validation_steps TEXT,
+            FOREIGN KEY (insight_id) REFERENCES insights(id)
+        )
+    """)
+
     # Create indexes for common queries
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_insights_run_id
@@ -125,6 +140,11 @@ def init_database(db_path: Optional[Path] = None) -> None:
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_runs_created
         ON runs(created_at DESC)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_explorations_insight
+        ON insight_explorations(insight_id)
     """)
 
     conn.commit()
@@ -433,6 +453,128 @@ def query_insights(
     params.append(limit)
 
     cursor.execute(query, params)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [dict(row) for row in rows]
+
+
+def get_insight_by_id(
+    insight_id: str,
+    db_path: Optional[Path] = None
+) -> Optional[Dict]:
+    """
+    Get a single insight by its ID.
+
+    Args:
+        insight_id: Insight identifier
+        db_path: Database path (optional)
+
+    Returns:
+        Insight dictionary or None if not found
+    """
+    db_path = get_db_path(db_path)
+
+    if not db_path.exists():
+        return None
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT * FROM insights
+        WHERE id = ?
+    """, (insight_id,))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        return dict(row)
+    return None
+
+
+def save_exploration(
+    insight_id: str,
+    model_used: str,
+    exploration_text: str,
+    monetization_hypotheses: Optional[str] = None,
+    product_variants: Optional[str] = None,
+    validation_steps: Optional[str] = None,
+    db_path: Optional[Path] = None
+) -> int:
+    """
+    Save an insight exploration to the database.
+
+    Args:
+        insight_id: Insight identifier
+        model_used: LLM model used for exploration
+        exploration_text: Full exploration text
+        monetization_hypotheses: JSON string of monetization ideas
+        product_variants: JSON string of product variants
+        validation_steps: JSON string of validation steps
+        db_path: Database path (optional)
+
+    Returns:
+        exploration_id: ID of the created exploration
+    """
+    db_path = get_db_path(db_path)
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO insight_explorations (
+            insight_id, created_at, model_used, exploration_text,
+            monetization_hypotheses, product_variants, validation_steps
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        insight_id,
+        datetime.now(),
+        model_used,
+        exploration_text,
+        monetization_hypotheses,
+        product_variants,
+        validation_steps
+    ))
+
+    exploration_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    logger.info(f"Saved exploration {exploration_id} for insight {insight_id}")
+    return exploration_id
+
+
+def get_explorations_for_insight(
+    insight_id: str,
+    db_path: Optional[Path] = None
+) -> List[Dict]:
+    """
+    Get all explorations for a specific insight.
+
+    Args:
+        insight_id: Insight identifier
+        db_path: Database path (optional)
+
+    Returns:
+        List of exploration dictionaries
+    """
+    db_path = get_db_path(db_path)
+
+    if not db_path.exists():
+        return []
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT * FROM insight_explorations
+        WHERE insight_id = ?
+        ORDER BY created_at DESC
+    """, (insight_id,))
 
     rows = cursor.fetchall()
     conn.close()
