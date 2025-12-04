@@ -1,0 +1,112 @@
+[
+  {
+    "id": "mock1",
+    "source": "reddit",
+    "title": "Need help automating invoices for my freelance business",
+    "selftext": "I spend hours every month creating invoices manually. Is there a tool that can automate this? I'm willing to pay for a good solution.",
+    "created_utc": 1699000000.0,
+    "permalink": "https://reddit.com/r/freelance/comments/mock1",
+    "score": 45,
+    "num_comments": 12,
+    "raw": {}
+  },
+  {
+    "id": "mock2",
+    "source": "reddit",
+    "title": "Struggling with time tracking as a freelancer",
+    "selftext": "I keep forgetting to track my hours and it's costing me money. Looking for an easy-to-use time tracker that integrates with invoicing.",
+    "created_utc": 1699001000.0,
+    "permalink": "https://reddit.com/r/freelance/comments/mock2",
+    "score": 38,
+    "num_comments": 8,
+    "raw": {}
+  },
+  {
+    "id": "mock3",
+    "source": "reddit",
+    "title": "How do you handle client contracts?",
+    "selftext": "I need a simple contract template for my freelance projects. Currently writing everything from scratch and it takes forever.",
+    "created_utc": 1699002000.0,
+    "permalink": "https://reddit.com/r/freelance/comments/mock3",
+    "score": 52,
+    "num_comments": 15,
+    "raw": {}
+  },
+  {
+    "id": "mock4",
+    "source": "reddit",
+    "title": "Best tool for project management as a solo freelancer?",
+    "selftext": "I'm juggling multiple clients and losing track of deadlines. Need something simple that doesn't require a team subscription.",
+    "created_utc": 1699003000.0,
+    "permalink": "https://reddit.com/r/freelance/comments/mock4",
+    "score": 41,
+    "num_comments": 10,
+    "raw": {}
+  },
+  {
+    "id": "mock5",
+    "source": "reddit",
+    "title": "Invoice automation - what do you use?",
+    "selftext": "Looking for recommendations on invoice automation tools. I'm tired of manual data entry every week.",
+    "created_utc": 1699004000.0,
+    "permalink": "https://reddit.com/r/freelance/comments/mock5",
+    "score": 35,
+    "num_comments": 7,
+    "raw": {}
+  },
+  {
+    "id": "mock6",
+    "source": "reddit",
+    "title": "Client keeps asking for revisions - how to set boundaries?",
+    "selftext": "I need a better way to define scope and revisions in my contracts. This is becoming a real problem.",
+    "created_utc": 1699005000.0,
+    "permalink": "https://reddit.com/r/freelance/comments/mock6",
+    "score": 67,
+    "num_comments": 23,
+    "raw": {}
+  },
+  {
+    "id": "mock7",
+    "source": "reddit",
+    "title": "Time tracking app that doesn't suck?",
+    "selftext": "I've tried 5 different time trackers and they're all too complicated or expensive. Just need something simple for billing clients.",
+    "created_utc": 1699006000.0,
+    "permalink": "https://reddit.com/r/freelance/comments/mock7",
+    "score": 29,
+    "num_comments": 6,
+    "raw": {}
+  },
+  {
+    "id": "mock8",
+    "source": "reddit",
+    "title": "How to manage multiple client projects efficiently?",
+    "selftext": "I'm overwhelmed with 4 clients and losing track of tasks. Need a simple project management solution for solo freelancers.",
+    "created_utc": 1699007000.0,
+    "permalink": "https://reddit.com/r/freelance/comments/mock8",
+    "score": 44,
+    "num_comments": 11,
+    "raw": {}
+  },
+  {
+    "id": "mock9",
+    "source": "reddit",
+    "title": "Automated reminder for unpaid invoices?",
+    "selftext": "Chasing payments is the worst part of freelancing. Is there a tool that automatically sends reminders to clients?",
+    "created_utc": 1699008000.0,
+    "permalink": "https://reddit.com/r/freelance/comments/mock9",
+    "score": 56,
+    "num_comments": 14,
+    "raw": {}
+  },
+  {
+    "id": "mock10",
+    "source": "reddit",
+    "title": "Simple contract template for freelancers?",
+    "selftext": "Looking for a contract template that covers basic freelance work. Don't need anything complex, just want to protect myself.",
+    "created_utc": 1699009000.0,
+    "permalink": "https://reddit.com/r/freelance/comments/mock10",
+    "score": 39,
+    "num_comments": 9,
+    "raw": {}
+  }
+]

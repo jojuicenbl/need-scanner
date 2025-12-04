@@ -89,7 +89,8 @@ class EnrichedInsight(BaseModel):
     heuristic_score: Optional[float] = None
     traction_score: Optional[float] = None
     novelty_score: Optional[float] = None
-    trend_score: Optional[float] = None  # Week-over-week growth score
+    trend_score: Optional[float] = None  # Market trend score (LLM + historical growth)
+    founder_fit_score: Optional[float] = None  # Founder fit score (1-10)
     keywords_matched: List[str] = []  # Keywords that triggered inclusion
     source_mix: List[str] = []  # List of sources in this cluster
 

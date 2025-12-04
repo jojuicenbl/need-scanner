@@ -953,6 +953,195 @@ def prefilter(
     logger.info("\n" + "=" * 60)
 
 
+@app.command()
+def scan(
+    config: Optional[str] = typer.Option(None, help="Configuration name (for future multi-config support)"),
+    mode: str = typer.Option("deep", help="Run mode: 'light' (faster, cheaper) or 'deep' (better quality)"),
+    max_insights: Optional[int] = typer.Option(None, help="Maximum number of insights to keep"),
+    input_pattern: str = typer.Option("data/raw/posts_*.json", help="Input file glob pattern"),
+    output_dir: Optional[Path] = typer.Option(None, help="Output directory (default: data/results_v2)"),
+    no_db: bool = typer.Option(False, help="Skip database save"),
+    no_mmr: bool = typer.Option(False, help="Disable MMR reranking"),
+    no_history: bool = typer.Option(False, help="Disable history-based penalty")
+):
+    """
+    Run complete Need Scanner pipeline (new v2.1 unified command).
+
+    This command orchestrates the full pipeline:
+    - Load posts from JSON files
+    - Generate embeddings
+    - Cluster posts
+    - Run enriched analysis (LLM scoring, trend, founder fit)
+    - Export to CSV/JSON
+    - Save to SQLite database
+
+    Examples:
+        # Deep mode (default): uses heavy model for TOP K insights
+        python -m need_scanner scan --mode deep --max-insights 20
+
+        # Light mode: faster and cheaper, uses light model for all
+        python -m need_scanner scan --mode light
+
+        # Custom input and output
+        python -m need_scanner scan --input-pattern "data/custom/*.json" --output-dir data/custom_results
+    """
+    setup_logger()
+
+    from .core import run_scan
+
+    try:
+        run_id = run_scan(
+            config_name=config,
+            mode=mode,
+            max_insights=max_insights,
+            input_pattern=input_pattern,
+            output_dir=Path(output_dir) if output_dir else None,
+            save_to_db=not no_db,
+            use_mmr=not no_mmr,
+            use_history_penalty=not no_history
+        )
+
+        logger.info(f"\n✅ Scan complete! Run ID: {run_id}")
+
+        if not no_db:
+            logger.info("\n💡 View results:")
+            logger.info(f"   python -m need_scanner show-insights {run_id}")
+
+    except FileNotFoundError as e:
+        logger.error(f"❌ {e}")
+        logger.info("\n💡 First collect some posts:")
+        logger.info("   python -m need_scanner collect-reddit-multi --limit-per-sub 30")
+        raise typer.Exit(1)
+    except Exception as e:
+        logger.error(f"❌ Scan failed: {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def list_runs(
+    limit: int = typer.Option(10, help="Maximum number of runs to show")
+):
+    """
+    List recent scan runs from database.
+
+    Example:
+        python -m need_scanner list-runs --limit 20
+    """
+    setup_logger()
+
+    from .db import list_runs as db_list_runs, get_db_path
+
+    db_path = get_db_path()
+
+    if not db_path.exists():
+        logger.error(f"❌ No database found at {db_path}")
+        logger.info("\n💡 Run a scan first:")
+        logger.info("   python -m need_scanner scan")
+        raise typer.Exit(1)
+
+    runs = db_list_runs(limit=limit)
+
+    if not runs:
+        logger.info("No runs found in database.")
+        return
+
+    logger.info(f"\n📊 Recent runs (showing {len(runs)}):")
+    logger.info("=" * 80)
+
+    for run in runs:
+        logger.info(f"\n🔍 Run ID: {run['id']}")
+        logger.info(f"   Created: {run['created_at']}")
+        logger.info(f"   Mode: {run['mode']}")
+        logger.info(f"   Insights: {run['nb_insights']}")
+        logger.info(f"   Clusters: {run['nb_clusters']}")
+        logger.info(f"   Cost: ${run['total_cost_usd']:.4f}")
+        if run['csv_path']:
+            logger.info(f"   CSV: {run['csv_path']}")
+
+    logger.info("\n" + "=" * 80)
+    logger.info("\n💡 View insights:")
+    logger.info(f"   python -m need_scanner show-insights {runs[0]['id']}")
+
+
+@app.command()
+def show_insights(
+    run_id: str = typer.Argument(..., help="Run ID to show insights for"),
+    limit: int = typer.Option(10, help="Maximum number of insights to show"),
+    sector: Optional[str] = typer.Option(None, help="Filter by sector"),
+    min_priority: Optional[float] = typer.Option(None, help="Minimum priority score"),
+    min_fit: Optional[float] = typer.Option(None, help="Minimum founder fit score")
+):
+    """
+    Show insights for a specific run from database.
+
+    Examples:
+        # Show top 10 insights
+        python -m need_scanner show-insights 20251125_143022
+
+        # Show top 20 with filters
+        python -m need_scanner show-insights 20251125_143022 --limit 20 --min-priority 6.0
+
+        # Filter by sector and founder fit
+        python -m need_scanner show-insights 20251125_143022 --sector dev_tools --min-fit 7.0
+    """
+    setup_logger()
+
+    from .db import get_run_insights, get_db_path
+
+    db_path = get_db_path()
+
+    if not db_path.exists():
+        logger.error(f"❌ No database found at {db_path}")
+        raise typer.Exit(1)
+
+    insights = get_run_insights(run_id, limit=None)
+
+    if not insights:
+        logger.error(f"❌ No insights found for run ID: {run_id}")
+        logger.info("\n💡 List available runs:")
+        logger.info("   python -m need_scanner list-runs")
+        raise typer.Exit(1)
+
+    # Apply filters
+    if sector:
+        insights = [i for i in insights if i.get('sector') == sector]
+
+    if min_priority is not None:
+        insights = [i for i in insights if (i.get('priority_score') or 0) >= min_priority]
+
+    if min_fit is not None:
+        insights = [i for i in insights if (i.get('founder_fit_score') or 0) >= min_fit]
+
+    # Sort by rank and limit
+    insights = sorted(insights, key=lambda x: x.get('rank', 999))[:limit]
+
+    if not insights:
+        logger.info("No insights match the specified filters.")
+        return
+
+    logger.info(f"\n🎯 Insights for run {run_id} (showing {len(insights)}):")
+    logger.info("=" * 80)
+
+    for insight in insights:
+        rank = insight.get('rank', '?')
+        title = insight.get('title', 'Untitled')
+        sector_val = insight.get('sector', 'unknown')
+        persona = insight.get('persona', 'Unknown')
+
+        priority = insight.get('priority_score', 0)
+        pain = insight.get('pain_score_llm', 0)
+        trend = insight.get('trend_score', 0)
+        fit = insight.get('founder_fit_score', 0)
+
+        logger.info(f"\n#{rank}: {title}")
+        logger.info(f"   Sector: {sector_val} | Persona: {persona}")
+        logger.info(f"   📊 Priority: {priority:.2f} | Pain: {pain} | Trend: {trend:.1f} | Fit: {fit:.1f}")
+        logger.info(f"   Problem: {insight.get('problem', 'N/A')[:100]}...")
+        logger.info(f"   MVP: {insight.get('mvp', 'N/A')[:100]}...")
+
+    logger.info("\n" + "=" * 80)
+
+
 def main():
     """Entry point for CLI."""
     app()

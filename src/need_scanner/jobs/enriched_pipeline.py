@@ -21,6 +21,8 @@ from ..analysis.priority import (
 )
 from ..analysis.scoring import compute_pain_score
 from ..analysis.wtp import detect_wtp_signals, get_wtp_score
+from ..analysis.trends import calculate_hybrid_trend_score
+from ..analysis.founder_fit import calculate_batch_founder_fit_scores
 from ..utils import format_cost
 
 
@@ -184,6 +186,44 @@ def run_enriched_pipeline(
     cluster_embeddings = np.array(cluster_embeddings)
 
     # ========================================================================
+    # STEP 4.5: Calculate trend scores and founder fit scores
+    # ========================================================================
+    logger.info("\n[STEP 4.5] Calculating trend scores (LLM + historical)...")
+
+    # Prepare summaries dict for trend and founder fit scoring
+    summaries_dict = {
+        summary.cluster_id: {
+            "title": summary.title,
+            "problem": summary.problem,
+            "description": summary.problem,  # Backward compat
+            "persona": summary.persona,
+            "sector": summary.sector
+        }
+        for summary in enriched_summaries
+    }
+
+    # Calculate hybrid trend scores (LLM + historical growth)
+    trend_scores = calculate_hybrid_trend_score(
+        cluster_data=cluster_data,
+        cluster_summaries=summaries_dict,
+        history_path=history_path.parent / "trends.json" if history_path else None,
+        model=config.ns_light_model,  # Use light model for trend scoring
+        api_key=config.openai_api_key,
+        use_llm=True,  # Enable LLM-based trend assessment
+        llm_weight=0.7  # 70% LLM, 30% historical
+    )
+
+    logger.info("\n[STEP 4.6] Calculating founder fit scores...")
+
+    # Calculate founder fit scores
+    founder_fit_scores = calculate_batch_founder_fit_scores(
+        cluster_summaries=summaries_dict,
+        model=config.ns_light_model,  # Use light model for founder fit
+        api_key=config.openai_api_key,
+        founder_profile=None  # Use default profile
+    )
+
+    # ========================================================================
     # STEP 5: Priority scoring
     # ========================================================================
     logger.info("\n[STEP 5] Computing priority scores...")
@@ -205,6 +245,10 @@ def run_enriched_pipeline(
         wtp_scores = [get_wtp_score(item['meta']) for item in items]
         avg_wtp_score = np.mean(wtp_scores) if wtp_scores else 0.0
 
+        # Get trend and founder fit scores
+        trend_score = trend_scores.get(cluster_id, 5.0)
+        founder_fit_score = founder_fit_scores.get(cluster_id, 5.0)
+
         # Priority score
         pain_llm = summary.pain_score_llm or 5.0
         heuristic = initial_scores.get(cluster_id, 5.0)
@@ -214,7 +258,8 @@ def run_enriched_pipeline(
             heuristic_score=heuristic,
             traction_score=traction_score,
             novelty_score=novelty_score,
-            wtp_score=avg_wtp_score
+            wtp_score=avg_wtp_score,
+            trend_score=trend_score
         )
 
         # Create insight
@@ -228,6 +273,8 @@ def run_enriched_pipeline(
             heuristic_score=heuristic,
             traction_score=traction_score,
             novelty_score=novelty_score,
+            trend_score=trend_score,
+            founder_fit_score=founder_fit_score,
             source_mix=list(set(item['meta'].get('source', 'unknown') for item in items))
         )
 

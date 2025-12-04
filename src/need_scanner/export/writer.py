@@ -72,6 +72,7 @@ def write_enriched_insights_csv(path: Path, insights: List[EnrichedInsight]) -> 
             "traction_score",
             "novelty_score",
             "trend_score",
+            "founder_fit_score",
             "keywords_matched",
             "source_mix",
             "example_urls"
@@ -104,6 +105,7 @@ def write_enriched_insights_csv(path: Path, insights: List[EnrichedInsight]) -> 
                 insight.traction_score or "",
                 insight.novelty_score or "",
                 insight.trend_score or "",
+                insight.founder_fit_score or "",
                 keywords_str,
                 source_mix_str,
                 example_urls
@@ -153,6 +155,7 @@ def write_enriched_cluster_results(
             "traction_score": insight.traction_score,
             "novelty_score": insight.novelty_score,
             "trend_score": insight.trend_score,
+            "founder_fit_score": insight.founder_fit_score,
             "keywords_matched": insight.keywords_matched,
             "source_mix": insight.source_mix,
             "examples": insight.examples

@@ -59,6 +59,7 @@ def export_insights_to_csv(
         'traction_score',
         'novelty_score',
         'trend_score',
+        'founder_fit_score',
 
         # Examples
         'example_urls',
@@ -71,19 +72,22 @@ def export_insights_to_csv(
         writer.writeheader()
 
         for insight in insights:
-            # Prepare alternatives as string
-            alternatives_str = ', '.join(insight.summary.alternatives) if insight.summary.alternatives else ''
+            # Prepare alternatives as string (filter out None values)
+            alternatives = insight.summary.alternatives or []
+            alternatives_str = ', '.join([alt for alt in alternatives if alt]) if alternatives else ''
 
-            # Prepare example URLs
+            # Prepare example URLs (filter out None values)
             example_urls = ', '.join([
-                ex.get('url', '') for ex in insight.examples[:3]
+                ex.get('url', '') or '' for ex in insight.examples[:3] if ex.get('url')
             ])
 
-            # Prepare source mix
-            source_mix_str = ', '.join(insight.source_mix) if insight.source_mix else ''
+            # Prepare source mix (filter out None values)
+            source_mix = insight.source_mix or []
+            source_mix_str = ', '.join([src for src in source_mix if src]) if source_mix else ''
 
-            # Prepare keywords
-            keywords_str = ', '.join(insight.keywords_matched) if insight.keywords_matched else ''
+            # Prepare keywords (filter out None values)
+            keywords = insight.keywords_matched or []
+            keywords_str = ', '.join([kw for kw in keywords if kw]) if keywords else ''
 
             row = {
                 # Ranking & Scores
@@ -117,6 +121,7 @@ def export_insights_to_csv(
                 'traction_score': f"{insight.traction_score:.1f}" if insight.traction_score else '',
                 'novelty_score': f"{insight.novelty_score:.1f}" if insight.novelty_score else '',
                 'trend_score': f"{insight.trend_score:.1f}" if insight.trend_score else '',
+                'founder_fit_score': f"{insight.founder_fit_score:.1f}" if insight.founder_fit_score else '',
 
                 # Examples
                 'example_urls': example_urls,
