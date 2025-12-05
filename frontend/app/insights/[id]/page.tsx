@@ -6,7 +6,7 @@ import { Insight, Exploration } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft, ExternalLink, Sparkles, Loader2 } from "lucide-react";
+import { ArrowLeft, ExternalLink, Sparkles, Loader2, Lightbulb, DollarSign, Repeat, CheckCircle2, XCircle } from "lucide-react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 
@@ -86,6 +86,32 @@ export default function InsightDetailPage({ params }: { params: Promise<{ id: st
                         </div>
                     </div>
                 </div>
+
+                {/* Step 5 Status Badges */}
+                <div className="flex flex-wrap gap-2">
+                    {insight.saas_viable !== undefined && (
+                        <Badge variant={insight.saas_viable ? "default" : "secondary"} className="gap-1">
+                            {insight.saas_viable ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                            {insight.saas_viable ? "SaaS Viable" : "Not SaaS"}
+                        </Badge>
+                    )}
+                    {insight.solution_type && (
+                        <Badge variant="outline" className="capitalize">
+                            {insight.solution_type.replace(/_/g, " ")}
+                        </Badge>
+                    )}
+                    {insight.is_historical_duplicate && (
+                        <Badge variant="secondary" className="gap-1">
+                            <Repeat className="w-3 h-3" />
+                            Seen Before ({((insight.max_similarity_with_history || 0) * 100).toFixed(0)}% similar)
+                        </Badge>
+                    )}
+                    {insight.product_complexity && (
+                        <Badge variant="outline" className="gap-1">
+                            Complexity: {insight.product_complexity}/3
+                        </Badge>
+                    )}
+                </div>
             </div>
 
             {/* Core Insight */}
@@ -150,10 +176,82 @@ export default function InsightDetailPage({ params }: { params: Promise<{ id: st
                                     />
                                 </div>
                             </div>
+                            {insight.recurring_revenue_potential !== undefined && (
+                                <div>
+                                    <div className="flex justify-between text-sm mb-1">
+                                        <span>Recurring Revenue Potential</span>
+                                        <span className="font-medium">{insight.recurring_revenue_potential}/10</span>
+                                    </div>
+                                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                        <div
+                                            className="h-full bg-emerald-600"
+                                            style={{ width: `${(insight.recurring_revenue_potential || 0) * 10}%` }}
+                                        />
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </CardContent>
                 </Card>
             </div>
+
+            {/* Product Ideation Section - Step 5.3 */}
+            {insight.product_angle_title && (
+                <Card className="border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50">
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2 text-amber-900">
+                            <Lightbulb className="h-5 w-5 text-amber-600" />
+                            Product Angle
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-6">
+                        <div>
+                            <h3 className="text-xl font-bold text-amber-900 mb-2">
+                                {insight.product_angle_title}
+                            </h3>
+                            <p className="text-amber-800 leading-relaxed">
+                                {insight.product_angle_summary}
+                            </p>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-amber-200">
+                            {insight.product_angle_type && (
+                                <div>
+                                    <div className="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-1">
+                                        Product Type
+                                    </div>
+                                    <div className="font-medium text-amber-900 capitalize">
+                                        {insight.product_angle_type.replace(/_/g, " ")}
+                                    </div>
+                                </div>
+                            )}
+                            {insight.product_pricing_hint && (
+                                <div>
+                                    <div className="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-1 flex items-center gap-1">
+                                        <DollarSign className="w-3 h-3" />
+                                        Pricing Hint
+                                    </div>
+                                    <div className="font-medium text-amber-900">
+                                        {insight.product_pricing_hint}
+                                    </div>
+                                </div>
+                            )}
+                            {insight.product_complexity && (
+                                <div>
+                                    <div className="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-1">
+                                        Solo Dev Complexity
+                                    </div>
+                                    <div className="font-medium text-amber-900">
+                                        {insight.product_complexity === 1 && "Easy (Weekend project)"}
+                                        {insight.product_complexity === 2 && "Medium (Few weeks)"}
+                                        {insight.product_complexity === 3 && "Hard (Months of work)"}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
 
             {/* Exploration Section */}
             <section className="space-y-6 pt-8 border-t border-slate-200">

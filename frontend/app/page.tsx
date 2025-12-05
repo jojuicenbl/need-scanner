@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { Loader2, Search } from "lucide-react";
+import { Loader2, Search, Sparkles, RefreshCw } from "lucide-react";
 
 export default function Home() {
     const router = useRouter();
@@ -20,6 +20,7 @@ export default function Home() {
 
     // Form state
     const [mode, setMode] = useState<"light" | "deep">("light");
+    const [runMode, setRunMode] = useState<"discover" | "track">("discover");
     const [maxInsights, setMaxInsights] = useState(20);
 
     useEffect(() => {
@@ -45,7 +46,7 @@ export default function Home() {
         e.preventDefault();
         setIsCreating(true);
         try {
-            const res = await api.createRun({ mode, max_insights: maxInsights });
+            const res = await api.createRun({ mode, max_insights: maxInsights, run_mode: runMode });
             router.push(`/runs/${res.run_id}`);
         } catch (error) {
             console.error("Failed to create run", error);
@@ -72,10 +73,52 @@ export default function Home() {
                     </CardHeader>
                     <CardContent>
                         <form onSubmit={handleCreateRun} className="space-y-6">
+                            {/* Run Mode Selector */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setRunMode("discover")}
+                                    className={`p-4 rounded-lg border-2 text-left transition-all ${
+                                        runMode === "discover"
+                                            ? "border-purple-500 bg-purple-50"
+                                            : "border-slate-200 hover:border-slate-300"
+                                    }`}
+                                >
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <Sparkles className={`h-4 w-4 ${runMode === "discover" ? "text-purple-600" : "text-slate-400"}`} />
+                                        <span className={`font-medium ${runMode === "discover" ? "text-purple-900" : "text-slate-700"}`}>
+                                            Discover
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-slate-500">
+                                        New ideas only. Filters duplicates and non-SaaS opportunities.
+                                    </p>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setRunMode("track")}
+                                    className={`p-4 rounded-lg border-2 text-left transition-all ${
+                                        runMode === "track"
+                                            ? "border-blue-500 bg-blue-50"
+                                            : "border-slate-200 hover:border-slate-300"
+                                    }`}
+                                >
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <RefreshCw className={`h-4 w-4 ${runMode === "track" ? "text-blue-600" : "text-slate-400"}`} />
+                                        <span className={`font-medium ${runMode === "track" ? "text-blue-900" : "text-slate-700"}`}>
+                                            Track
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-slate-500">
+                                        Show all insights including seen before and non-SaaS.
+                                    </p>
+                                </button>
+                            </div>
+
                             <div className="grid grid-cols-2 gap-6">
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                                        Mode
+                                        Scan Depth
                                     </label>
                                     <Select
                                         value={mode}

@@ -44,10 +44,17 @@ class Config(BaseSettings):
     # History & deduplication
     ns_history_retention_days: int = 30  # Keep history for N days
     ns_history_penalty_factor: float = 0.3  # Similarity penalty strength (0-1)
+    ns_duplicate_threshold: float = 0.90  # Similarity threshold for duplicate detection
+    ns_run_mode: str = "discover"  # "discover" (filter duplicates) or "track" (show all)
 
     # MMR reranking
     ns_mmr_lambda: float = 0.7  # Balance relevance vs diversity (0-1)
     ns_mmr_top_k: int = 10  # Number of items to select with MMR
+
+    # SaaS-ability / Productizability
+    ns_saas_viable_filter: bool = True  # Filter non-SaaS insights by default
+    ns_recurring_revenue_threshold: float = 5.0  # Min score to be considered SaaS-viable
+    ns_top_k_ideation: int = 5  # Number of top insights to run ideation on
 
     # Cost controls
     ns_cost_warn_prompt_usd: float = 0.50

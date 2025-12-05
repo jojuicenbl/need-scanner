@@ -31,7 +31,8 @@ def run_scan(
     save_to_db: bool = True,
     db_path: Optional[Path] = None,
     use_mmr: bool = True,
-    use_history_penalty: bool = True
+    use_history_penalty: bool = True,
+    run_mode: str = "discover"  # "discover" (filter duplicates/non-SaaS) or "track"
 ) -> str:
     """
     Run complete Need Scanner pipeline and return run_id.
@@ -57,6 +58,7 @@ def run_scan(
         db_path: Custom database path (default: from config/env)
         use_mmr: Use MMR reranking for diversity (default: True)
         use_history_penalty: Apply history-based similarity penalty (default: True)
+        run_mode: "discover" (filter duplicates & non-SaaS) or "track" (show all)
 
     Returns:
         run_id: Unique identifier for this scan run
@@ -171,23 +173,26 @@ def run_scan(
             labels=labels,
             output_dir=output_dir,
             use_mmr=use_mmr,
-            use_history_penalty=use_history_penalty
+            use_history_penalty=use_history_penalty,
+            run_mode=run_mode
         )
     finally:
         # Restore original config
         config.ns_top_k_enrichment = original_top_k
         config.ns_heavy_model = original_heavy_model
 
+    # Get filtered insights (for display/export) and all insights (for DB)
     insights: List[EnrichedInsight] = results['insights']
+    all_insights: List[EnrichedInsight] = results.get('all_insights', insights)
     total_cost = results['total_cost']
     summary_cost = results.get('summary_cost', 0.0)
 
-    # Apply max_insights limit if specified
+    # Apply max_insights limit if specified (to filtered insights)
     if max_insights and len(insights) > max_insights:
         logger.info(f"Limiting insights to top {max_insights} (from {len(insights)})")
         insights = insights[:max_insights]
 
-    logger.info(f"Generated {len(insights)} insights")
+    logger.info(f"Generated {len(insights)} filtered insights ({len(all_insights)} total)")
 
     # ========================================================================
     # STEP 5: Export results
@@ -225,25 +230,28 @@ def run_scan(
             run_id=run_id,
             config_name=config_name or "default",
             mode=mode,
-            nb_insights=len(insights),
+            nb_insights=len(all_insights),  # Save total count
             nb_clusters=len(cluster_data),
             total_cost_usd=total_cost,
             embed_cost_usd=embed_cost,
             summary_cost_usd=summary_cost,
             csv_path=str(csv_path),
             json_path=str(json_path),
-            notes=f"Input: {input_pattern}",
+            notes=f"Input: {input_pattern} | Mode: {run_mode} | Filtered: {len(insights)}",
             db_path=db_path
         )
 
+        # Save ALL insights to DB (including non-SaaS and duplicates)
+        # This allows querying them later with filters
         save_insights(
             run_id=run_id,
-            insights=insights,
+            insights=all_insights,
             db_path=db_path
         )
 
         db_location = get_db_path(db_path)
         logger.info(f"   Database: {db_location}")
+        logger.info(f"   Saved {len(all_insights)} insights (filtered: {len(insights)})")
     else:
         logger.info("\n[6/6] Skipping database save (disabled)")
 

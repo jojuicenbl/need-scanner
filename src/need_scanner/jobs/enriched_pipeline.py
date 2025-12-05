@@ -1,9 +1,16 @@
-"""Enhanced pipeline with sector tagging, MMR, and history-based deduplication."""
+"""Enhanced pipeline with sector tagging, MMR, history-based deduplication,
+productizability scoring, and product ideation.
+
+STEP 5 improvements:
+- Inter-day deduplication with similarity tracking
+- SaaS-ability / Productizability classification
+- Product ideation for top insights
+"""
 
 import json
 import numpy as np
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Literal
 from loguru import logger
 
 from ..config import get_config
@@ -23,6 +30,8 @@ from ..analysis.scoring import compute_pain_score
 from ..analysis.wtp import detect_wtp_signals, get_wtp_score
 from ..analysis.trends import calculate_hybrid_trend_score
 from ..analysis.founder_fit import calculate_batch_founder_fit_scores
+from ..analysis.productizability import classify_batch_productizability
+from ..analysis.ideation import generate_batch_product_angles
 from ..utils import format_cost
 
 
@@ -33,7 +42,8 @@ def run_enriched_pipeline(
     output_dir: Path,
     history_path: Optional[Path] = None,
     use_mmr: bool = True,
-    use_history_penalty: bool = True
+    use_history_penalty: bool = True,
+    run_mode: Literal["discover", "track"] = "discover"
 ) -> Dict:
     """
     Run the enhanced pipeline with all improvements.
@@ -43,9 +53,12 @@ def run_enriched_pipeline(
     2. Enrich TOP K clusters with heavy model (persona, JTBD, etc.)
     3. Enrich remaining clusters with light model (or skip)
     4. Classify sectors for all clusters
-    5. Apply history-based similarity penalty
-    6. MMR reranking for diversity
-    7. Save results and update history
+    5. Apply history-based similarity penalty + track duplicates
+    6. Classify productizability (SaaS-ability)
+    7. MMR reranking for diversity
+    8. Filter by SaaS-viability (in discover mode)
+    9. Product ideation for top K insights
+    10. Save results and update history
 
     Args:
         cluster_data: Dict mapping cluster_id to list of items
@@ -55,6 +68,7 @@ def run_enriched_pipeline(
         history_path: Path to history file (defaults to data/history/clusters.jsonl)
         use_mmr: Whether to use MMR reranking
         use_history_penalty: Whether to apply history penalty
+        run_mode: "discover" (filter duplicates & non-SaaS) or "track" (show all)
 
     Returns:
         Dict with pipeline results and stats
@@ -281,10 +295,11 @@ def run_enriched_pipeline(
         insights.append(insight)
 
     # ========================================================================
-    # STEP 6: History-based similarity penalty
+    # STEP 6: History-based similarity penalty + duplicate detection
     # ========================================================================
     if use_history_penalty:
         logger.info(f"\n[STEP 6] Applying history-based similarity penalty (factor={config.ns_history_penalty_factor})...")
+        logger.info(f"         Duplicate threshold: {config.ns_duplicate_threshold}, Mode: {run_mode}")
 
         history = load_or_create_history(
             history_path=history_path,
@@ -294,6 +309,12 @@ def run_enriched_pipeline(
         # Extract priority scores
         priority_scores = np.array([ins.priority_score for ins in insights])
 
+        # Compute detailed similarity info (new in Step 5)
+        similarity_results = history.compute_detailed_similarity(
+            new_embeddings=cluster_embeddings,
+            duplicate_threshold=config.ns_duplicate_threshold
+        )
+
         # Apply penalty
         adjusted_scores = history.apply_penalty_to_scores(
             priority_scores=priority_scores,
@@ -301,15 +322,60 @@ def run_enriched_pipeline(
             penalty_factor=config.ns_history_penalty_factor
         )
 
-        # Update insights
+        # Update insights with similarity info and adjusted scores
+        duplicates_count = 0
         for i, insight in enumerate(insights):
             insight.priority_score_adjusted = float(adjusted_scores[i])
 
-        logger.info("Applied history penalty to priority scores")
+            # Add similarity tracking fields
+            sim_result = similarity_results[i]
+            insight.max_similarity_with_history = sim_result.max_similarity
+            insight.duplicate_of_insight_id = sim_result.most_similar_id
+            insight.is_historical_duplicate = sim_result.is_duplicate
+
+            if sim_result.is_duplicate:
+                duplicates_count += 1
+
+        logger.info(f"Applied history penalty. Found {duplicates_count}/{len(insights)} historical duplicates.")
     else:
         logger.info("\n[STEP 6] Skipping history penalty (disabled)")
         for insight in insights:
             insight.priority_score_adjusted = insight.priority_score
+            insight.max_similarity_with_history = 0.0
+            insight.is_historical_duplicate = False
+
+    # ========================================================================
+    # STEP 6.5: Productizability classification (SaaS-ability)
+    # ========================================================================
+    logger.info(f"\n[STEP 6.5] Classifying productizability (SaaS-ability)...")
+
+    # Prepare insights for classification
+    insights_for_classification = [
+        {
+            "cluster_id": ins.cluster_id,
+            "title": ins.summary.title,
+            "problem": ins.summary.problem,
+            "sector": ins.summary.sector,
+            "persona": ins.summary.persona,
+            "jtbd": ins.summary.jtbd
+        }
+        for ins in insights
+    ]
+
+    productizability_results, productizability_cost = classify_batch_productizability(
+        insights=insights_for_classification,
+        model=config.ns_light_model,
+        api_key=config.openai_api_key,
+        recurring_revenue_threshold=config.ns_recurring_revenue_threshold
+    )
+    total_cost += productizability_cost
+
+    # Apply productizability classification to insights
+    for insight in insights:
+        result = productizability_results.get(insight.cluster_id, {})
+        insight.solution_type = result.get("solution_type")
+        insight.recurring_revenue_potential = result.get("recurring_revenue_potential")
+        insight.saas_viable = result.get("saas_viable", False)
 
     # ========================================================================
     # STEP 7: MMR reranking
@@ -349,20 +415,85 @@ def run_enriched_pipeline(
         for i, insight in enumerate(reranked_insights, 1):
             insight.mmr_rank = i
 
-    # Assign final ranks
+    # Assign final ranks (before filtering)
     for i, insight in enumerate(reranked_insights, 1):
         insight.rank = i
 
     # ========================================================================
-    # STEP 8: Save results
+    # STEP 8: Filter by SaaS-viability and duplicates (in discover mode)
     # ========================================================================
-    logger.info("\n[STEP 8] Saving results...")
+    all_insights = reranked_insights  # Keep all for DB storage
+    filtered_insights = reranked_insights
 
-    # Save JSON
+    if run_mode == "discover":
+        logger.info(f"\n[STEP 8] Filtering insights (discover mode)...")
+
+        # Filter out historical duplicates
+        pre_filter_count = len(filtered_insights)
+        filtered_insights = [ins for ins in filtered_insights if not ins.is_historical_duplicate]
+        logger.info(f"  After duplicate filter: {len(filtered_insights)}/{pre_filter_count}")
+
+        # Filter by SaaS viability if enabled
+        if config.ns_saas_viable_filter:
+            pre_filter_count = len(filtered_insights)
+            filtered_insights = [ins for ins in filtered_insights if ins.saas_viable]
+            logger.info(f"  After SaaS viability filter: {len(filtered_insights)}/{pre_filter_count}")
+
+        # Re-assign ranks after filtering
+        for i, insight in enumerate(filtered_insights, 1):
+            insight.rank = i
+
+        logger.info(f"  Final filtered insights: {len(filtered_insights)}")
+    else:
+        logger.info(f"\n[STEP 8] Track mode - keeping all insights (no filtering)")
+
+    # ========================================================================
+    # STEP 9: Product ideation for top K filtered insights
+    # ========================================================================
+    logger.info(f"\n[STEP 9] Product ideation for top {config.ns_top_k_ideation} insights...")
+
+    # Only run ideation on filtered, SaaS-viable insights
+    insights_for_ideation = [
+        {
+            "cluster_id": ins.cluster_id,
+            "title": ins.summary.title,
+            "problem": ins.summary.problem,
+            "sector": ins.summary.sector,
+            "persona": ins.summary.persona,
+            "jtbd": ins.summary.jtbd,
+            "solution_type": ins.solution_type,
+            "recurring_revenue_potential": ins.recurring_revenue_potential
+        }
+        for ins in filtered_insights[:config.ns_top_k_ideation]
+    ]
+
+    ideation_results, ideation_cost = generate_batch_product_angles(
+        insights=insights_for_ideation,
+        model=config.ns_heavy_model,
+        api_key=config.openai_api_key,
+        top_k=config.ns_top_k_ideation
+    )
+    total_cost += ideation_cost
+
+    # Apply ideation results to insights
+    for insight in filtered_insights:
+        result = ideation_results.get(insight.cluster_id, {})
+        insight.product_angle_title = result.get("product_angle_title")
+        insight.product_angle_summary = result.get("product_angle_summary")
+        insight.product_angle_type = result.get("product_angle_type")
+        insight.product_pricing_hint = result.get("product_pricing_hint")
+        insight.product_complexity = result.get("product_complexity")
+
+    # ========================================================================
+    # STEP 10: Save results
+    # ========================================================================
+    logger.info("\n[STEP 10] Saving results...")
+
+    # Save JSON (filtered insights)
     results_path = output_dir / "enriched_results.json"
     with open(results_path, 'w', encoding='utf-8') as f:
         json.dump(
-            [insight.dict() for insight in reranked_insights],
+            [insight.dict() for insight in filtered_insights],
             f,
             indent=2,
             ensure_ascii=False
@@ -370,13 +501,23 @@ def run_enriched_pipeline(
 
     logger.info(f"Saved enriched results to {results_path}")
 
-    # Save CSV (optional - can be done with export module)
+    # Save all insights (including non-SaaS and duplicates) for reference
+    all_results_path = output_dir / "all_insights.json"
+    with open(all_results_path, 'w', encoding='utf-8') as f:
+        json.dump(
+            [insight.dict() for insight in all_insights],
+            f,
+            indent=2,
+            ensure_ascii=False
+        )
+
+    logger.info(f"Saved all insights (unfiltered) to {all_results_path}")
 
     # ========================================================================
-    # STEP 9: Update history
+    # STEP 11: Update history
     # ========================================================================
     if use_history_penalty:
-        logger.info("\n[STEP 9] Updating history...")
+        logger.info("\n[STEP 11] Updating history...")
 
         history.add_clusters(
             cluster_summaries=enriched_summaries,
@@ -387,7 +528,7 @@ def run_enriched_pipeline(
 
         logger.info("History updated")
     else:
-        logger.info("\n[STEP 9] Skipping history update (disabled)")
+        logger.info("\n[STEP 11] Skipping history update (disabled)")
 
     # ========================================================================
     # Summary stats
@@ -396,20 +537,35 @@ def run_enriched_pipeline(
     logger.info("PIPELINE COMPLETE")
     logger.info("=" * 60)
     logger.info(f"Total clusters: {len(insights)}")
-    logger.info(f"Top insights: {len(reranked_insights)}")
+    logger.info(f"After filtering: {len(filtered_insights)}")
+    logger.info(f"SaaS-viable: {sum(1 for ins in insights if ins.saas_viable)}")
+    logger.info(f"Historical duplicates: {sum(1 for ins in insights if ins.is_historical_duplicate)}")
+    logger.info(f"With product ideation: {sum(1 for ins in filtered_insights if ins.product_angle_title)}")
     logger.info(f"Total LLM cost: {format_cost(total_cost)}")
 
-    # Show top 5
-    logger.info("\nTOP 5 INSIGHTS:")
-    for insight in reranked_insights[:5]:
+    # Show top 5 with product angles
+    logger.info("\nTOP 5 PRODUCT OPPORTUNITIES:")
+    for insight in filtered_insights[:5]:
+        product_info = ""
+        if insight.product_angle_title:
+            product_info = f" -> {insight.product_angle_title} ({insight.product_angle_type})"
         logger.info(
-            f"  #{insight.rank} [{insight.summary.sector}] {insight.summary.title} "
-            f"(priority: {insight.priority_score:.2f}, adjusted: {insight.priority_score_adjusted:.2f})"
+            f"  #{insight.rank} [{insight.summary.sector}] {insight.summary.title}"
+            f"{product_info}"
+        )
+        logger.info(
+            f"       Priority: {insight.priority_score:.2f} | "
+            f"SaaS: {insight.saas_viable} | "
+            f"Type: {insight.solution_type} | "
+            f"Revenue: {insight.recurring_revenue_potential}/10"
         )
 
     return {
-        'insights': reranked_insights,
+        'insights': filtered_insights,  # Return filtered insights by default
+        'all_insights': all_insights,   # Also return all for DB storage
         'total_cost': total_cost,
         'num_clusters': len(insights),
-        'num_top_insights': len(reranked_insights)
+        'num_filtered_insights': len(filtered_insights),
+        'num_saas_viable': sum(1 for ins in insights if ins.saas_viable),
+        'num_duplicates': sum(1 for ins in insights if ins.is_historical_duplicate)
     }

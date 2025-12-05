@@ -52,12 +52,14 @@ class ScanRequest(BaseModel):
     mode: str = Field("deep", description="Scan mode: 'light' or 'deep'")
     max_insights: Optional[int] = Field(None, description="Maximum number of insights to generate")
     input_pattern: str = Field("data/raw/posts_*.json", description="Glob pattern for input files")
+    run_mode: str = Field("discover", description="Run mode: 'discover' (filter duplicates/non-SaaS) or 'track' (show all)")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "mode": "deep",
-                "max_insights": 20
+                "max_insights": 20,
+                "run_mode": "discover"
             }
         }
 
@@ -92,6 +94,11 @@ class InsightSummary(BaseModel):
     pain_score_final: Optional[float]
     trend_score: Optional[float]
     founder_fit_score: Optional[float]
+    # Step 5 additions
+    solution_type: Optional[str] = None
+    saas_viable: Optional[bool] = None
+    is_historical_duplicate: Optional[bool] = None
+    product_angle_title: Optional[str] = None
 
 
 class InsightDetail(BaseModel):
@@ -125,6 +132,20 @@ class InsightDetail(BaseModel):
     source_mix: Optional[str]
     example_urls: Optional[str]
     created_at: str
+    # Step 5.1: Inter-day deduplication
+    max_similarity_with_history: Optional[float] = None
+    duplicate_of_insight_id: Optional[str] = None
+    is_historical_duplicate: Optional[bool] = None
+    # Step 5.2: SaaS-ability / Productizability
+    solution_type: Optional[str] = None
+    recurring_revenue_potential: Optional[float] = None
+    saas_viable: Optional[bool] = None
+    # Step 5.3: Product Ideation
+    product_angle_title: Optional[str] = None
+    product_angle_summary: Optional[str] = None
+    product_angle_type: Optional[str] = None
+    product_pricing_hint: Optional[str] = None
+    product_complexity: Optional[int] = None
 
 
 class ExploreRequest(BaseModel):
@@ -224,16 +245,21 @@ async def create_run(
     - `light`: Use lightweight model for all insights (faster, cheaper)
     - `deep`: Use heavy model for top insights (better quality)
 
+    **Run mode options:**
+    - `discover`: Filter out duplicates and non-SaaS insights (default)
+    - `track`: Show all insights including duplicates
+
     **Example:**
     ```json
     {
         "mode": "deep",
-        "max_insights": 20
+        "max_insights": 20,
+        "run_mode": "discover"
     }
     ```
     """
     try:
-        logger.info(f"Creating new scan run: mode={request.mode}, max_insights={request.max_insights}")
+        logger.info(f"Creating new scan run: mode={request.mode}, run_mode={request.run_mode}, max_insights={request.max_insights}")
 
         # Validate mode
         if request.mode not in ["light", "deep"]:
@@ -242,13 +268,21 @@ async def create_run(
                 detail=f"Invalid mode '{request.mode}'. Must be 'light' or 'deep'."
             )
 
+        # Validate run_mode
+        if request.run_mode not in ["discover", "track"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid run_mode '{request.run_mode}'. Must be 'discover' or 'track'."
+            )
+
         # Run scan synchronously (for now - could be made async with background tasks)
         run_id = core_run_scan(
             config_name=request.config_name,
             mode=request.mode,
             max_insights=request.max_insights,
             input_pattern=request.input_pattern,
-            save_to_db=True
+            save_to_db=True,
+            run_mode=request.run_mode
         )
 
         return ScanResponse(
@@ -306,21 +340,26 @@ async def get_run_insights_endpoint(
     run_id: str,
     limit: Optional[int] = Query(None, description="Maximum number of insights to return", ge=1),
     sector: Optional[str] = Query(None, description="Filter by sector"),
-    min_priority: Optional[float] = Query(None, description="Minimum priority score", ge=0, le=10)
+    min_priority: Optional[float] = Query(None, description="Minimum priority score", ge=0, le=10),
+    saas_viable_only: bool = Query(False, description="Only return SaaS-viable insights"),
+    include_duplicates: bool = Query(False, description="Include historical duplicates"),
+    solution_type: Optional[str] = Query(None, description="Filter by solution type (saas_b2b, saas_b2c, tooling_dev, etc.)")
 ):
     """
     Get insights for a specific run.
 
-    Returns all insights for the given run_id, optionally filtered by sector
-    and minimum priority score.
+    Returns all insights for the given run_id, optionally filtered.
 
     **Query Parameters:**
     - `limit`: Maximum number of insights to return
     - `sector`: Filter by sector (e.g., 'dev_tools', 'business_pme')
     - `min_priority`: Minimum priority score (0-10)
+    - `saas_viable_only`: Only return SaaS-viable insights (default: false)
+    - `include_duplicates`: Include historical duplicates (default: false)
+    - `solution_type`: Filter by solution type (saas_b2b, saas_b2c, tooling_dev, api_product, service_only, content_only, hardware_required, regulation_policy, impractical_unclear)
     """
     try:
-        insights = get_run_insights(run_id=run_id, limit=limit)
+        insights = get_run_insights(run_id=run_id, limit=None)  # Get all, filter later
 
         if not insights:
             raise HTTPException(status_code=404, detail=f"No insights found for run_id: {run_id}")
@@ -334,6 +373,19 @@ async def get_run_insights_endpoint(
         if min_priority is not None:
             filtered_insights = [i for i in filtered_insights if i.get("priority_score", 0) >= min_priority]
 
+        if saas_viable_only:
+            filtered_insights = [i for i in filtered_insights if i.get("saas_viable") == 1]
+
+        if not include_duplicates:
+            filtered_insights = [i for i in filtered_insights if not i.get("is_historical_duplicate")]
+
+        if solution_type:
+            filtered_insights = [i for i in filtered_insights if i.get("solution_type") == solution_type]
+
+        # Apply limit after filtering
+        if limit:
+            filtered_insights = filtered_insights[:limit]
+
         return [
             InsightSummary(
                 id=insight["id"],
@@ -345,7 +397,11 @@ async def get_run_insights_endpoint(
                 priority_score=insight["priority_score"],
                 pain_score_final=insight.get("pain_score_final"),
                 trend_score=insight.get("trend_score"),
-                founder_fit_score=insight.get("founder_fit_score")
+                founder_fit_score=insight.get("founder_fit_score"),
+                solution_type=insight.get("solution_type"),
+                saas_viable=bool(insight.get("saas_viable")) if insight.get("saas_viable") is not None else None,
+                is_historical_duplicate=bool(insight.get("is_historical_duplicate")) if insight.get("is_historical_duplicate") is not None else None,
+                product_angle_title=insight.get("product_angle_title")
             )
             for insight in filtered_insights
         ]

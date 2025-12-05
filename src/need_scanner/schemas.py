@@ -94,6 +94,23 @@ class EnrichedInsight(BaseModel):
     keywords_matched: List[str] = []  # Keywords that triggered inclusion
     source_mix: List[str] = []  # List of sources in this cluster
 
+    # Inter-day deduplication (Step 5.1)
+    max_similarity_with_history: Optional[float] = None  # Max cosine similarity with historical insights
+    duplicate_of_insight_id: Optional[str] = None  # ID of the most similar historical insight
+    is_historical_duplicate: bool = False  # True if similarity >= threshold
+
+    # SaaS-ability / Productizability (Step 5.2)
+    solution_type: Optional[str] = None  # saas_b2b, saas_b2c, tooling_dev, api_product, service_only, content_only, hardware_required, regulation_policy, impractical_unclear
+    recurring_revenue_potential: Optional[float] = None  # 1-10 scale
+    saas_viable: Optional[bool] = None  # True if SaaS-exploitable by indie dev
+
+    # Product Ideation (Step 5.3)
+    product_angle_title: Optional[str] = None  # Short title for the product opportunity
+    product_angle_summary: Optional[str] = None  # Description of the product angle
+    product_angle_type: Optional[str] = None  # indie_saas, b2b_saas, plugin, api, etc.
+    product_pricing_hint: Optional[str] = None  # Pricing range suggestion
+    product_complexity: Optional[int] = None  # 1-3 scale for solo dev
+
 
 class Insight(BaseModel):
     """Complete insight for a cluster with examples and summary (legacy format)."""

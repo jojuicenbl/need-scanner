@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { Run } from "@/types";
 import { RunList } from "@/components/RunList";
 import { Button } from "@/components/ui/button";
-import { Layers } from "lucide-react";
 
 export default function RunsPage() {
     const [runs, setRuns] = useState<Run[]>([]);
@@ -37,7 +37,7 @@ export default function RunsPage() {
                     <p className="text-slate-500 mt-1">History of your market analysis scans.</p>
                 </div>
                 <Button asChild>
-                    <a href="/">New Scan</a>
+                    <Link href="/">New Scan</Link>
                 </Button>
             </div>
 

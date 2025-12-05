@@ -4,9 +4,16 @@ import json
 import numpy as np
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, NamedTuple
 from loguru import logger
 from sklearn.metrics.pairwise import cosine_similarity
+
+
+class SimilarityResult(NamedTuple):
+    """Result of similarity computation for a single insight."""
+    max_similarity: float
+    most_similar_id: Optional[str]
+    is_duplicate: bool
 
 
 class ClusterHistory:
@@ -130,6 +137,64 @@ class ClusterHistory:
             return np.array([])
 
         return np.array(embeddings)
+
+    def compute_detailed_similarity(
+        self,
+        new_embeddings: np.ndarray,
+        duplicate_threshold: float = 0.90
+    ) -> List[SimilarityResult]:
+        """
+        Compute detailed similarity for each new insight against history.
+
+        Returns max similarity, the ID of the most similar historical insight,
+        and whether it's considered a duplicate.
+
+        Args:
+            new_embeddings: Array of new cluster embeddings (N, D)
+            duplicate_threshold: Similarity threshold above which an insight is a duplicate
+
+        Returns:
+            List of SimilarityResult for each input embedding
+        """
+        results = []
+        historical_embeddings = self.get_embeddings()
+
+        if len(historical_embeddings) == 0:
+            logger.info("No historical embeddings, all insights are novel")
+            return [SimilarityResult(0.0, None, False) for _ in range(len(new_embeddings))]
+
+        # Compute cosine similarity matrix
+        similarities = cosine_similarity(new_embeddings, historical_embeddings)
+
+        # For each new embedding, find max similarity and corresponding history entry
+        for i in range(len(new_embeddings)):
+            row_similarities = similarities[i]
+            max_idx = np.argmax(row_similarities)
+            max_sim = float(row_similarities[max_idx])
+
+            # Get the ID of the most similar historical entry
+            most_similar_id = None
+            if max_idx < len(self.entries):
+                most_similar_id = self.entries[max_idx].get('id')
+
+            is_duplicate = max_sim >= duplicate_threshold
+
+            results.append(SimilarityResult(
+                max_similarity=max_sim,
+                most_similar_id=most_similar_id,
+                is_duplicate=is_duplicate
+            ))
+
+        # Log summary
+        duplicates_count = sum(1 for r in results if r.is_duplicate)
+        if results:
+            avg_sim = np.mean([r.max_similarity for r in results])
+            logger.info(
+                f"Similarity analysis: {duplicates_count}/{len(results)} duplicates "
+                f"(threshold={duplicate_threshold:.2f}), avg_similarity={avg_sim:.3f}"
+            )
+
+        return results
 
     def compute_similarity_penalty(
         self,

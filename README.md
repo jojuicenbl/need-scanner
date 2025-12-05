@@ -33,6 +33,24 @@ Transformer des milliers de posts utilisateurs en insights actionnables pour ide
 - ✅ **Base de données** : Table `insight_explorations` pour stocker les analyses détaillées
 - ✅ **Documentation auto** : Swagger UI intégré pour tester l'API interactivement
 
+### 🎯 **NOUVEAU : Qualité du Moteur (ÉTAPE 5)**
+- ✅ **Mémoire inter-jour améliorée** : Détection de duplicatas par similarité (seuil configurable 0.90)
+  - `max_similarity_with_history` : Score de similarité max avec l'historique
+  - `is_historical_duplicate` : Marqueur booléen pour les idées déjà vues
+  - Mode "discover" : Filtre automatique des duplicatas
+  - Mode "track" : Conserve tout pour suivre les pains récurrents
+- ✅ **SaaS-ability / Productizability** : Classification automatique de la viabilité produit
+  - `solution_type` : saas_b2b, saas_b2c, tooling_dev, api_product, service_only, content_only, hardware_required, regulation_policy, impractical_unclear
+  - `recurring_revenue_potential` : Score 1-10 du potentiel de revenus récurrents
+  - `saas_viable` : Booléen combinant type + revenu récurrent
+- ✅ **Product Ideation** : Génération automatique de pistes produit pour top insights
+  - `product_angle_title` : Titre court de l'opportunité
+  - `product_angle_summary` : Description de l'angle produit
+  - `product_angle_type` : indie_saas, b2b_saas, plugin, api, etc.
+  - `product_pricing_hint` : Fourchette de pricing suggérée
+  - `product_complexity` : Complexité 1-3 pour un solo dev
+- ✅ **Cron & Slack désactivés** : Usage via API/CLI uniquement (plus de notifications automatiques)
+
 📖 **Voir documentation** : [docs/ENGINE_IMPROVEMENTS.md](docs/ENGINE_IMPROVEMENTS.md) | [docs/STEP1_ENGINE_IMPROVEMENTS.md](docs/STEP1_ENGINE_IMPROVEMENTS.md) | [docs/STEP2_LIB_AND_DATABASE.md](docs/STEP2_LIB_AND_DATABASE.md) | [docs/STEP3_HTTP_API.md](docs/STEP3_HTTP_API.md)
 
 ### 📊 **Analyse Enrichie**
@@ -212,10 +230,10 @@ uvicorn need_scanner.api:app --reload --host 0.0.0.0 --port 8000
 |---------|----------|-------------|
 | GET | `/` | Informations de l'API |
 | GET | `/health` | Health check |
-| POST | `/runs` | Créer un nouveau scan |
+| POST | `/runs` | Créer un nouveau scan (mode: light/deep, run_mode: discover/track) |
 | GET | `/runs` | Lister les runs récents |
-| GET | `/runs/{run_id}/insights` | Insights d'un run |
-| GET | `/insights/{insight_id}` | Détails d'un insight |
+| GET | `/runs/{run_id}/insights` | Insights d'un run (filtres: saas_viable_only, include_duplicates, solution_type) |
+| GET | `/insights/{insight_id}` | Détails d'un insight (inclut product_angle_*, solution_type, etc.) |
 | POST | `/insights/{insight_id}/explore` | Explorer un insight en profondeur |
 | GET | `/insights/{insight_id}/explorations` | Historique des explorations |
 
@@ -226,16 +244,30 @@ uvicorn need_scanner.api:app --reload --host 0.0.0.0 --port 8000
 **Exemples d'utilisation** :
 
 ```bash
-# Créer un scan
+# Créer un scan en mode discover (filtre duplicatas + non-SaaS)
 curl -X POST "http://localhost:8000/runs" \
   -H "Content-Type: application/json" \
-  -d '{"mode": "deep", "max_insights": 15}'
+  -d '{"mode": "deep", "max_insights": 15, "run_mode": "discover"}'
+
+# Créer un scan en mode track (garde tout, y compris duplicatas)
+curl -X POST "http://localhost:8000/runs" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "deep", "run_mode": "track"}'
 
 # Lister les runs
 curl "http://localhost:8000/runs?limit=5"
 
-# Voir les insights (avec filtres)
-curl "http://localhost:8000/runs/20251126_143022/insights?sector=dev_tools&min_priority=6.0"
+# Voir les insights SaaS-viables uniquement
+curl "http://localhost:8000/runs/20251126_143022/insights?saas_viable_only=true"
+
+# Voir tous les insights y compris duplicatas
+curl "http://localhost:8000/runs/20251126_143022/insights?include_duplicates=true"
+
+# Filtrer par type de solution
+curl "http://localhost:8000/runs/20251126_143022/insights?solution_type=saas_b2b"
+
+# Voir les insights (avec filtres combinés)
+curl "http://localhost:8000/runs/20251126_143022/insights?sector=dev_tools&min_priority=6.0&saas_viable_only=true"
 
 # Explorer un insight avec GPT-4o
 curl -X POST "http://localhost:8000/insights/20251126_143022_cluster_1/explore" \
@@ -427,7 +459,16 @@ Ce projet a été développé avec Claude Code. Pour contribuer :
 - ✅ Documentation Swagger/ReDoc
 - ✅ Gestion erreurs et validation
 
+**v5.0 - Qualité du Moteur** (2025-12) :
+- ✅ Mémoire inter-jour améliorée (similarité + duplicatas)
+- ✅ Classification SaaS-ability / Productizability
+- ✅ Product Ideation pour top insights
+- ✅ Modes discover/track
+- ✅ Filtres API avancés (saas_viable, solution_type, duplicates)
+- ✅ Désactivation cron GitHub Actions & Slack
+
 **À venir** :
+- [ ] Frontend unmet (Next.js) avec nouveaux filtres
 - [ ] Tests d'intégration API
 - [ ] Dashboard web interactif (React/Vue)
 - [ ] Authentification et multi-utilisateurs
