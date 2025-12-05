@@ -94,10 +94,12 @@ class InsightSummary(BaseModel):
     pain_score_final: Optional[float]
     trend_score: Optional[float]
     founder_fit_score: Optional[float]
-    # Step 5 additions
+    # Step 5 / 5-bis additions
     solution_type: Optional[str] = None
     saas_viable: Optional[bool] = None
     is_historical_duplicate: Optional[bool] = None
+    is_recurring_theme: Optional[bool] = None
+    was_readded_by_fallback: Optional[bool] = None
     product_angle_title: Optional[str] = None
 
 
@@ -132,10 +134,12 @@ class InsightDetail(BaseModel):
     source_mix: Optional[str]
     example_urls: Optional[str]
     created_at: str
-    # Step 5.1: Inter-day deduplication
+    # Step 5.1 / 5-bis: Inter-day deduplication
     max_similarity_with_history: Optional[float] = None
     duplicate_of_insight_id: Optional[str] = None
     is_historical_duplicate: Optional[bool] = None
+    is_recurring_theme: Optional[bool] = None
+    was_readded_by_fallback: Optional[bool] = None
     # Step 5.2: SaaS-ability / Productizability
     solution_type: Optional[str] = None
     recurring_revenue_potential: Optional[float] = None
@@ -377,7 +381,11 @@ async def get_run_insights_endpoint(
             filtered_insights = [i for i in filtered_insights if i.get("saas_viable") == 1]
 
         if not include_duplicates:
-            filtered_insights = [i for i in filtered_insights if not i.get("is_historical_duplicate")]
+            # Step 5-bis: Keep insights that were re-added by fallback, even if they are duplicates
+            filtered_insights = [
+                i for i in filtered_insights
+                if not i.get("is_historical_duplicate") or i.get("was_readded_by_fallback")
+            ]
 
         if solution_type:
             filtered_insights = [i for i in filtered_insights if i.get("solution_type") == solution_type]
@@ -401,6 +409,8 @@ async def get_run_insights_endpoint(
                 solution_type=insight.get("solution_type"),
                 saas_viable=bool(insight.get("saas_viable")) if insight.get("saas_viable") is not None else None,
                 is_historical_duplicate=bool(insight.get("is_historical_duplicate")) if insight.get("is_historical_duplicate") is not None else None,
+                is_recurring_theme=bool(insight.get("is_recurring_theme")) if insight.get("is_recurring_theme") is not None else None,
+                was_readded_by_fallback=bool(insight.get("was_readded_by_fallback")) if insight.get("was_readded_by_fallback") is not None else None,
                 product_angle_title=insight.get("product_angle_title")
             )
             for insight in filtered_insights

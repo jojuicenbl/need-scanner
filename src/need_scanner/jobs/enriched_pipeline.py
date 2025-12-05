@@ -295,11 +295,24 @@ def run_enriched_pipeline(
         insights.append(insight)
 
     # ========================================================================
-    # STEP 6: History-based similarity penalty + duplicate detection
+    # STEP 6: History-based similarity penalty + duplicate detection (Step 5-bis)
     # ========================================================================
+    # Run stats for instrumentation
+    run_stats = {
+        'raw_clusters_count': len(insights),
+        'after_saas_filter_count': 0,
+        'after_memory_penalty_count': 0,
+        'final_insights_count': 0,
+        'num_exact_duplicates': 0,
+        'num_recurring_themes': 0,
+        'num_readded_by_fallback': 0,
+        'num_novel': 0,
+    }
+
     if use_history_penalty:
-        logger.info(f"\n[STEP 6] Applying history-based similarity penalty (factor={config.ns_history_penalty_factor})...")
-        logger.info(f"         Duplicate threshold: {config.ns_duplicate_threshold}, Mode: {run_mode}")
+        logger.info(f"\n[STEP 6] Applying history-based similarity penalty (Step 5-bis)...")
+        logger.info(f"         Window: {config.ns_history_window_days_discover} days, tau={config.ns_history_sim_threshold_safe}, alpha={config.ns_history_sim_penalty_alpha}")
+        logger.info(f"         Exact dup threshold: {config.ns_history_sim_exact_dup_threshold}, Mode: {run_mode}")
 
         history = load_or_create_history(
             history_path=history_path,
@@ -309,21 +322,27 @@ def run_enriched_pipeline(
         # Extract priority scores
         priority_scores = np.array([ins.priority_score for ins in insights])
 
-        # Compute detailed similarity info (new in Step 5)
+        # Step 5-bis: Use shorter window for discover mode
+        window_days = config.ns_history_window_days_discover if run_mode == "discover" else None
+
+        # Compute detailed similarity info with new thresholds
         similarity_results = history.compute_detailed_similarity(
             new_embeddings=cluster_embeddings,
-            duplicate_threshold=config.ns_duplicate_threshold
+            tau=config.ns_history_sim_threshold_safe,
+            exact_dup_threshold=config.ns_history_sim_exact_dup_threshold,
+            window_days=window_days
         )
 
-        # Apply penalty
+        # Apply gradual penalty (Step 5-bis)
         adjusted_scores = history.apply_penalty_to_scores(
             priority_scores=priority_scores,
             new_embeddings=cluster_embeddings,
-            penalty_factor=config.ns_history_penalty_factor
+            tau=config.ns_history_sim_threshold_safe,
+            alpha=config.ns_history_sim_penalty_alpha,
+            window_days=window_days
         )
 
         # Update insights with similarity info and adjusted scores
-        duplicates_count = 0
         for i, insight in enumerate(insights):
             insight.priority_score_adjusted = float(adjusted_scores[i])
 
@@ -331,18 +350,30 @@ def run_enriched_pipeline(
             sim_result = similarity_results[i]
             insight.max_similarity_with_history = sim_result.max_similarity
             insight.duplicate_of_insight_id = sim_result.most_similar_id
-            insight.is_historical_duplicate = sim_result.is_duplicate
+            insight.is_historical_duplicate = sim_result.is_duplicate  # Only exact duplicates
+            insight.is_recurring_theme = sim_result.is_recurring  # Similar but not exact
 
+            # Update stats
             if sim_result.is_duplicate:
-                duplicates_count += 1
+                run_stats['num_exact_duplicates'] += 1
+            elif sim_result.is_recurring:
+                run_stats['num_recurring_themes'] += 1
+            else:
+                run_stats['num_novel'] += 1
 
-        logger.info(f"Applied history penalty. Found {duplicates_count}/{len(insights)} historical duplicates.")
+        logger.info(
+            f"History analysis: {run_stats['num_novel']} novel, "
+            f"{run_stats['num_recurring_themes']} recurring, "
+            f"{run_stats['num_exact_duplicates']} exact duplicates"
+        )
     else:
         logger.info("\n[STEP 6] Skipping history penalty (disabled)")
         for insight in insights:
             insight.priority_score_adjusted = insight.priority_score
             insight.max_similarity_with_history = 0.0
             insight.is_historical_duplicate = False
+            insight.is_recurring_theme = False
+        run_stats['num_novel'] = len(insights)
 
     # ========================================================================
     # STEP 6.5: Productizability classification (SaaS-ability)
@@ -421,31 +452,94 @@ def run_enriched_pipeline(
 
     # ========================================================================
     # STEP 8: Filter by SaaS-viability and duplicates (in discover mode)
+    # With Step 5-bis fallback to ensure minimum insights per run
     # ========================================================================
     all_insights = reranked_insights  # Keep all for DB storage
-    filtered_insights = reranked_insights
+    filtered_insights = list(reranked_insights)  # Copy for filtering
+    secondary_candidates = []  # Insights excluded only by memory/SaaS filters
 
     if run_mode == "discover":
-        logger.info(f"\n[STEP 8] Filtering insights (discover mode)...")
+        logger.info(f"\n[STEP 8] Filtering insights (discover mode with fallback)...")
+        logger.info(f"         Min insights per run: {config.ns_min_insights_per_run}")
 
-        # Filter out historical duplicates
+        # Step 1: Filter out exact duplicates (these are truly redundant)
         pre_filter_count = len(filtered_insights)
-        filtered_insights = [ins for ins in filtered_insights if not ins.is_historical_duplicate]
-        logger.info(f"  After duplicate filter: {len(filtered_insights)}/{pre_filter_count}")
+        primary_candidates = []
+        for ins in filtered_insights:
+            if ins.is_historical_duplicate:
+                # Exact duplicates go to secondary (can be re-added by fallback)
+                secondary_candidates.append(ins)
+            else:
+                primary_candidates.append(ins)
 
-        # Filter by SaaS viability if enabled
+        logger.info(f"  After exact duplicate filter: {len(primary_candidates)}/{pre_filter_count}")
+        run_stats['after_memory_penalty_count'] = len(primary_candidates)
+
+        # Step 2: Filter by SaaS viability if enabled
         if config.ns_saas_viable_filter:
-            pre_filter_count = len(filtered_insights)
-            filtered_insights = [ins for ins in filtered_insights if ins.saas_viable]
-            logger.info(f"  After SaaS viability filter: {len(filtered_insights)}/{pre_filter_count}")
+            pre_filter_count = len(primary_candidates)
+            temp_primary = []
+            for ins in primary_candidates:
+                if ins.saas_viable:
+                    temp_primary.append(ins)
+                else:
+                    # Non-SaaS go to secondary (can be re-added if needed)
+                    secondary_candidates.append(ins)
+            primary_candidates = temp_primary
+            logger.info(f"  After SaaS viability filter: {len(primary_candidates)}/{pre_filter_count}")
+
+        run_stats['after_saas_filter_count'] = len(primary_candidates)
+
+        # Step 3: Fallback - ensure minimum insights per run (Step 5-bis)
+        min_insights = config.ns_min_insights_per_run
+        if len(primary_candidates) < min_insights and secondary_candidates:
+            logger.info(f"\n  [FALLBACK] Only {len(primary_candidates)} insights, need {min_insights}")
+
+            # Sort secondary by original priority score (before memory penalty)
+            secondary_candidates.sort(key=lambda x: x.priority_score, reverse=True)
+
+            # Re-add best secondary candidates until we reach min_insights
+            needed = min_insights - len(primary_candidates)
+            for ins in secondary_candidates[:needed]:
+                ins.was_readded_by_fallback = True
+                primary_candidates.append(ins)
+                run_stats['num_readded_by_fallback'] += 1
+                logger.info(
+                    f"    Re-added: {ins.summary.title[:50]}... "
+                    f"(sim={ins.max_similarity_with_history:.3f}, "
+                    f"recurring={ins.is_recurring_theme}, saas={ins.saas_viable})"
+                )
+
+            logger.info(f"  After fallback: {len(primary_candidates)} insights")
+
+        filtered_insights = primary_candidates
 
         # Re-assign ranks after filtering
         for i, insight in enumerate(filtered_insights, 1):
             insight.rank = i
 
+        run_stats['final_insights_count'] = len(filtered_insights)
         logger.info(f"  Final filtered insights: {len(filtered_insights)}")
     else:
         logger.info(f"\n[STEP 8] Track mode - keeping all insights (no filtering)")
+        run_stats['final_insights_count'] = len(filtered_insights)
+        run_stats['after_memory_penalty_count'] = len(filtered_insights)
+        run_stats['after_saas_filter_count'] = len(filtered_insights)
+
+    # ========================================================================
+    # STEP 8.5: Log run stats for instrumentation
+    # ========================================================================
+    logger.info("\n" + "-" * 40)
+    logger.info("[unmet] Run Stats (Step 5-bis instrumentation):")
+    logger.info(f"  raw clusters: {run_stats['raw_clusters_count']}")
+    logger.info(f"  after memory filter: {run_stats['after_memory_penalty_count']}")
+    logger.info(f"  after SaaS filter: {run_stats['after_saas_filter_count']}")
+    logger.info(f"  final insights: {run_stats['final_insights_count']}")
+    logger.info(f"  exact duplicates: {run_stats['num_exact_duplicates']}")
+    logger.info(f"  recurring themes: {run_stats['num_recurring_themes']}")
+    logger.info(f"  novel insights: {run_stats['num_novel']}")
+    logger.info(f"  readded by fallback: {run_stats['num_readded_by_fallback']}")
+    logger.info("-" * 40)
 
     # ========================================================================
     # STEP 9: Product ideation for top K filtered insights
@@ -539,7 +633,9 @@ def run_enriched_pipeline(
     logger.info(f"Total clusters: {len(insights)}")
     logger.info(f"After filtering: {len(filtered_insights)}")
     logger.info(f"SaaS-viable: {sum(1 for ins in insights if ins.saas_viable)}")
-    logger.info(f"Historical duplicates: {sum(1 for ins in insights if ins.is_historical_duplicate)}")
+    logger.info(f"Exact duplicates: {run_stats['num_exact_duplicates']}")
+    logger.info(f"Recurring themes: {run_stats['num_recurring_themes']}")
+    logger.info(f"Re-added by fallback: {run_stats['num_readded_by_fallback']}")
     logger.info(f"With product ideation: {sum(1 for ins in filtered_insights if ins.product_angle_title)}")
     logger.info(f"Total LLM cost: {format_cost(total_cost)}")
 
@@ -549,15 +645,24 @@ def run_enriched_pipeline(
         product_info = ""
         if insight.product_angle_title:
             product_info = f" -> {insight.product_angle_title} ({insight.product_angle_type})"
+
+        # Show fallback/recurring status
+        status_flags = []
+        if insight.was_readded_by_fallback:
+            status_flags.append("FALLBACK")
+        if insight.is_recurring_theme:
+            status_flags.append("RECURRING")
+        status_str = f" [{', '.join(status_flags)}]" if status_flags else ""
+
         logger.info(
             f"  #{insight.rank} [{insight.summary.sector}] {insight.summary.title}"
-            f"{product_info}"
+            f"{product_info}{status_str}"
         )
         logger.info(
-            f"       Priority: {insight.priority_score:.2f} | "
+            f"       Priority: {insight.priority_score:.2f} (adj: {insight.priority_score_adjusted:.2f}) | "
             f"SaaS: {insight.saas_viable} | "
             f"Type: {insight.solution_type} | "
-            f"Revenue: {insight.recurring_revenue_potential}/10"
+            f"Sim: {insight.max_similarity_with_history:.3f}"
         )
 
     return {
@@ -567,5 +672,8 @@ def run_enriched_pipeline(
         'num_clusters': len(insights),
         'num_filtered_insights': len(filtered_insights),
         'num_saas_viable': sum(1 for ins in insights if ins.saas_viable),
-        'num_duplicates': sum(1 for ins in insights if ins.is_historical_duplicate)
+        'num_duplicates': run_stats['num_exact_duplicates'],
+        'num_recurring_themes': run_stats['num_recurring_themes'],
+        'num_readded_by_fallback': run_stats['num_readded_by_fallback'],
+        'run_stats': run_stats  # Full stats for instrumentation
     }

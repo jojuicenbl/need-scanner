@@ -94,10 +94,12 @@ class EnrichedInsight(BaseModel):
     keywords_matched: List[str] = []  # Keywords that triggered inclusion
     source_mix: List[str] = []  # List of sources in this cluster
 
-    # Inter-day deduplication (Step 5.1)
+    # Inter-day deduplication (Step 5.1 / 5-bis)
     max_similarity_with_history: Optional[float] = None  # Max cosine similarity with historical insights
     duplicate_of_insight_id: Optional[str] = None  # ID of the most similar historical insight
-    is_historical_duplicate: bool = False  # True if similarity >= threshold
+    is_historical_duplicate: bool = False  # True if similarity >= exact_dup_threshold (0.985)
+    is_recurring_theme: bool = False  # True if similarity >= tau but < exact_dup_threshold
+    was_readded_by_fallback: bool = False  # True if insight was re-added by min_insights fallback
 
     # SaaS-ability / Productizability (Step 5.2)
     solution_type: Optional[str] = None  # saas_b2b, saas_b2c, tooling_dev, api_product, service_only, content_only, hardware_required, regulation_policy, impractical_unclear

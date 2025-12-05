@@ -2,17 +2,20 @@
 
 import glob
 import json
+import os
 from pathlib import Path
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from loguru import logger
 
-from .config import get_config
+from .config import get_config, load_subreddit_pack
 from .schemas import Post, EnrichedInsight
 from .processing.embed import embed_posts
 from .processing.cluster import cluster, get_cluster_data
 from .jobs.enriched_pipeline import run_enriched_pipeline
 from .export.csv_v2 import export_insights_to_csv
 from .export.writer import write_enriched_cluster_results
+from .fetchers.reddit import fetch_multiple_subreddits
 from .db import (
     init_database,
     generate_run_id,
@@ -20,6 +23,90 @@ from .db import (
     save_insights,
     get_db_path
 )
+
+
+# Default max age for posts data (in days)
+DEFAULT_MAX_DATA_AGE_DAYS = 1
+
+
+def _check_data_freshness(input_pattern: str, max_age_days: int = 1) -> tuple[bool, Optional[datetime]]:
+    """
+    Check if existing data files are fresh enough.
+
+    Args:
+        input_pattern: Glob pattern for input files
+        max_age_days: Maximum acceptable age in days
+
+    Returns:
+        Tuple of (is_fresh, oldest_file_date)
+    """
+    files = glob.glob(input_pattern)
+    if not files:
+        return False, None
+
+    oldest_mtime = None
+    for f in files:
+        mtime = datetime.fromtimestamp(os.path.getmtime(f))
+        if oldest_mtime is None or mtime < oldest_mtime:
+            oldest_mtime = mtime
+
+    if oldest_mtime is None:
+        return False, None
+
+    age = datetime.now() - oldest_mtime
+    is_fresh = age < timedelta(days=max_age_days)
+
+    return is_fresh, oldest_mtime
+
+
+def _fetch_fresh_data(
+    pack_name: str = "multi_sector",
+    output_dir: Path = Path("data/raw"),
+    limit_per_sub: int = 30,
+    clear_old: bool = True
+) -> int:
+    """
+    Fetch fresh posts from Reddit using specified pack.
+
+    Args:
+        pack_name: Name of subreddit pack to use
+        output_dir: Directory to save posts
+        limit_per_sub: Posts per subreddit
+        clear_old: Whether to delete old files first
+
+    Returns:
+        Number of posts fetched
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clear old files if requested
+    if clear_old:
+        old_files = list(output_dir.glob("posts_*.json"))
+        if old_files:
+            logger.info(f"Clearing {len(old_files)} old data files...")
+            for f in old_files:
+                f.unlink()
+
+    # Load subreddit pack
+    try:
+        subreddits = load_subreddit_pack(pack_name)
+        logger.info(f"Loaded pack '{pack_name}' with {len(subreddits)} subreddits")
+    except FileNotFoundError:
+        # Fallback to a minimal set
+        logger.warning(f"Pack '{pack_name}' not found, using fallback subreddits")
+        subreddits = ["freelance", "Entrepreneur", "smallbusiness", "SaaS", "webdev"]
+
+    # Fetch posts
+    posts = fetch_multiple_subreddits(
+        subreddits=subreddits,
+        limit_per_sub=limit_per_sub,
+        mode="new",
+        output_dir=output_dir
+    )
+
+    logger.info(f"Fetched {len(posts)} fresh posts")
+    return len(posts)
 
 
 def run_scan(
@@ -32,13 +119,19 @@ def run_scan(
     db_path: Optional[Path] = None,
     use_mmr: bool = True,
     use_history_penalty: bool = True,
-    run_mode: str = "discover"  # "discover" (filter duplicates/non-SaaS) or "track"
+    run_mode: str = "discover",  # "discover" (filter duplicates/non-SaaS) or "track"
+    # Auto-fetch options
+    auto_fetch: bool = True,  # Automatically fetch fresh data if stale
+    max_data_age_days: int = 1,  # Max age of data before refetch
+    fetch_pack: str = "multi_sector",  # Subreddit pack to use for fetch
+    fetch_limit_per_sub: int = 30  # Posts per subreddit when fetching
 ) -> str:
     """
     Run complete Need Scanner pipeline and return run_id.
 
     This is the main entry point for programmatic usage of Need Scanner.
     It orchestrates the full pipeline:
+    0. [NEW] Auto-fetch fresh data if existing data is stale
     1. Load collected posts from JSON files
     2. Generate embeddings
     3. Cluster posts
@@ -59,6 +152,10 @@ def run_scan(
         use_mmr: Use MMR reranking for diversity (default: True)
         use_history_penalty: Apply history-based similarity penalty (default: True)
         run_mode: "discover" (filter duplicates & non-SaaS) or "track" (show all)
+        auto_fetch: Automatically fetch fresh data if stale (default: True)
+        max_data_age_days: Max age of data before refetch (default: 1 day)
+        fetch_pack: Subreddit pack to use for fetch (default: "multi_sector")
+        fetch_limit_per_sub: Posts per subreddit when fetching (default: 30)
 
     Returns:
         run_id: Unique identifier for this scan run
@@ -93,19 +190,57 @@ def run_scan(
         init_database(db_path)
 
     logger.info("=" * 60)
-    logger.info(f"🚀 Need Scanner - Run ID: {run_id}")
+    logger.info(f"Need Scanner - Run ID: {run_id}")
     logger.info(f"   Mode: {mode}")
     logger.info(f"   Config: {config_name or 'default'}")
+    logger.info(f"   Auto-fetch: {auto_fetch} (max age: {max_data_age_days} days)")
     logger.info("=" * 60)
+
+    # ========================================================================
+    # STEP 0: Check data freshness and auto-fetch if needed
+    # ========================================================================
+    if auto_fetch:
+        is_fresh, oldest_date = _check_data_freshness(input_pattern, max_data_age_days)
+
+        if not is_fresh:
+            if oldest_date:
+                age_days = (datetime.now() - oldest_date).days
+                logger.warning(f"\n[0/7] Data is stale! Oldest file: {oldest_date.strftime('%Y-%m-%d')} ({age_days} days old)")
+            else:
+                logger.warning(f"\n[0/7] No existing data found")
+
+            logger.info(f"       Fetching fresh data from pack '{fetch_pack}'...")
+
+            # Determine raw data directory from input pattern
+            raw_dir = Path(input_pattern).parent
+            if "*" in str(raw_dir):
+                raw_dir = Path("data/raw")
+
+            num_fetched = _fetch_fresh_data(
+                pack_name=fetch_pack,
+                output_dir=raw_dir,
+                limit_per_sub=fetch_limit_per_sub,
+                clear_old=True
+            )
+
+            if num_fetched == 0:
+                raise ValueError("Failed to fetch any posts. Check network connection and subreddit pack.")
+
+            logger.info(f"       Fetched {num_fetched} fresh posts")
+        else:
+            logger.info(f"\n[0/7] Data is fresh (oldest: {oldest_date.strftime('%Y-%m-%d %H:%M')})")
 
     # ========================================================================
     # STEP 1: Load posts
     # ========================================================================
-    logger.info("\n[1/6] Loading posts...")
+    logger.info("\n[1/7] Loading posts...")
 
     posts_files = glob.glob(input_pattern)
     if not posts_files:
-        raise FileNotFoundError(f"No files found matching pattern: {input_pattern}")
+        if auto_fetch:
+            raise FileNotFoundError(f"No files found after fetch. Pattern: {input_pattern}")
+        else:
+            raise FileNotFoundError(f"No files found matching pattern: {input_pattern}. Consider enabling auto_fetch=True.")
 
     all_posts = []
     for file_path in posts_files:
@@ -121,7 +256,7 @@ def run_scan(
     # ========================================================================
     # STEP 2: Generate embeddings
     # ========================================================================
-    logger.info("\n[2/6] Generating embeddings...")
+    logger.info("\n[2/7] Generating embeddings...")
 
     embeddings, metadata, embed_cost = embed_posts(
         posts=all_posts,
@@ -135,7 +270,7 @@ def run_scan(
     # ========================================================================
     # STEP 3: Clustering
     # ========================================================================
-    logger.info("\n[3/6] Clustering...")
+    logger.info("\n[3/7] Clustering...")
 
     n_clusters = min(config.ns_num_clusters, len(all_posts))
     labels, _ = cluster(embeddings, n_clusters=n_clusters)
@@ -147,7 +282,7 @@ def run_scan(
     # ========================================================================
     # STEP 4: Run enriched pipeline
     # ========================================================================
-    logger.info(f"\n[4/6] Running enriched pipeline ({mode} mode)...")
+    logger.info(f"\n[4/7] Running enriched pipeline ({mode} mode)...")
     logger.info("   - Multi-model enrichment")
     logger.info("   - Trend scoring (LLM + historical)")
     logger.info("   - Founder fit scoring")
@@ -186,6 +321,7 @@ def run_scan(
     all_insights: List[EnrichedInsight] = results.get('all_insights', insights)
     total_cost = results['total_cost']
     summary_cost = results.get('summary_cost', 0.0)
+    run_stats = results.get('run_stats')  # Step 5-bis instrumentation
 
     # Apply max_insights limit if specified (to filtered insights)
     if max_insights and len(insights) > max_insights:
@@ -197,7 +333,7 @@ def run_scan(
     # ========================================================================
     # STEP 5: Export results
     # ========================================================================
-    logger.info("\n[5/6] Exporting results...")
+    logger.info("\n[5/7] Exporting results...")
 
     # CSV export
     csv_path = output_dir / f"insights_{run_id}.csv"
@@ -224,7 +360,7 @@ def run_scan(
     # STEP 6: Save to database
     # ========================================================================
     if save_to_db:
-        logger.info("\n[6/6] Saving to database...")
+        logger.info("\n[6/7] Saving to database...")
 
         save_run(
             run_id=run_id,
@@ -238,6 +374,7 @@ def run_scan(
             csv_path=str(csv_path),
             json_path=str(json_path),
             notes=f"Input: {input_pattern} | Mode: {run_mode} | Filtered: {len(insights)}",
+            run_stats=run_stats,  # Step 5-bis instrumentation
             db_path=db_path
         )
 
@@ -253,7 +390,7 @@ def run_scan(
         logger.info(f"   Database: {db_location}")
         logger.info(f"   Saved {len(all_insights)} insights (filtered: {len(insights)})")
     else:
-        logger.info("\n[6/6] Skipping database save (disabled)")
+        logger.info("\n[6/7] Skipping database save (disabled)")
 
     # ========================================================================
     # Summary

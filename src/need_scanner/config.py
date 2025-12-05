@@ -47,6 +47,13 @@ class Config(BaseSettings):
     ns_duplicate_threshold: float = 0.90  # Similarity threshold for duplicate detection
     ns_run_mode: str = "discover"  # "discover" (filter duplicates) or "track" (show all)
 
+    # Memory stabilization (Step 5-bis)
+    ns_history_window_days_discover: int = 7  # Shorter window for discover mode penalty
+    ns_history_sim_threshold_safe: float = 0.90  # tau: below this, no penalty
+    ns_history_sim_penalty_alpha: float = 0.5  # alpha: penalty multiplier (0-1)
+    ns_history_sim_exact_dup_threshold: float = 0.985  # Above this = exact duplicate (excluded)
+    ns_min_insights_per_run: int = 10  # Minimum insights to return (fallback)
+
     # MMR reranking
     ns_mmr_lambda: float = 0.7  # Balance relevance vs diversity (0-1)
     ns_mmr_top_k: int = 10  # Number of items to select with MMR

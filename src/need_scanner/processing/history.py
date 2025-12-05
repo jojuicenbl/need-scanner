@@ -1,4 +1,11 @@
-"""Cluster history management for inter-day deduplication."""
+"""Cluster history management for inter-day deduplication.
+
+Step 5-bis Memory Stabilization:
+- Gradual penalty instead of binary filtering
+- Shorter history window for discover mode
+- Configurable thresholds (tau, alpha, exact_dup)
+- Fallback to ensure minimum insights per run
+"""
 
 import json
 import numpy as np
@@ -13,7 +20,8 @@ class SimilarityResult(NamedTuple):
     """Result of similarity computation for a single insight."""
     max_similarity: float
     most_similar_id: Optional[str]
-    is_duplicate: bool
+    is_duplicate: bool  # True only for exact duplicates (sim >= exact_dup_threshold)
+    is_recurring: bool  # True if similar but not exact duplicate (sim >= tau)
 
 
 class ClusterHistory:
@@ -119,49 +127,70 @@ class ClusterHistory:
 
         logger.info(f"Added {len(cluster_summaries)} clusters to history (date: {date})")
 
-    def get_embeddings(self) -> np.ndarray:
+    def get_embeddings(self, window_days: Optional[int] = None) -> Tuple[np.ndarray, List[Dict]]:
         """
-        Get all historical embeddings.
+        Get historical embeddings, optionally filtered by a time window.
+
+        Args:
+            window_days: If provided, only return entries from the last N days
 
         Returns:
-            Array of embeddings (N, D)
+            Tuple of (embeddings array (N, D), filtered entries list)
         """
-        embeddings = []
+        if window_days is not None:
+            cutoff_date = datetime.now() - timedelta(days=window_days)
+            cutoff_str = cutoff_date.strftime("%Y-%m-%d")
+            filtered_entries = [
+                entry for entry in self.entries
+                if entry.get('date', '') >= cutoff_str
+            ]
+            logger.debug(f"History window: {window_days} days, {len(filtered_entries)}/{len(self.entries)} entries")
+        else:
+            filtered_entries = self.entries
 
-        for entry in self.entries:
+        embeddings = []
+        valid_entries = []
+
+        for entry in filtered_entries:
             embedding = entry.get('embedding', [])
             if embedding:
                 embeddings.append(embedding)
+                valid_entries.append(entry)
 
         if not embeddings:
-            return np.array([])
+            return np.array([]), []
 
-        return np.array(embeddings)
+        return np.array(embeddings), valid_entries
 
     def compute_detailed_similarity(
         self,
         new_embeddings: np.ndarray,
-        duplicate_threshold: float = 0.90
+        tau: float = 0.90,
+        exact_dup_threshold: float = 0.985,
+        window_days: Optional[int] = None
     ) -> List[SimilarityResult]:
         """
         Compute detailed similarity for each new insight against history.
 
-        Returns max similarity, the ID of the most similar historical insight,
-        and whether it's considered a duplicate.
+        Step 5-bis: Gradual penalty instead of binary filtering.
+        - is_duplicate: True only for near-clones (sim >= exact_dup_threshold)
+        - is_recurring: True for similar insights (sim >= tau) but not exact
 
         Args:
             new_embeddings: Array of new cluster embeddings (N, D)
-            duplicate_threshold: Similarity threshold above which an insight is a duplicate
+            tau: Safe threshold - below this, no memory penalty (default 0.90)
+            exact_dup_threshold: Above this = exact duplicate, will be excluded (default 0.985)
+            window_days: If provided, only compare against last N days of history
 
         Returns:
             List of SimilarityResult for each input embedding
         """
         results = []
-        historical_embeddings = self.get_embeddings()
+        historical_embeddings, filtered_entries = self.get_embeddings(window_days=window_days)
 
         if len(historical_embeddings) == 0:
             logger.info("No historical embeddings, all insights are novel")
-            return [SimilarityResult(0.0, None, False) for _ in range(len(new_embeddings))]
+            return [SimilarityResult(0.0, None, False, False) for _ in range(len(new_embeddings))]
 
         # Compute cosine similarity matrix
         similarities = cosine_similarity(new_embeddings, historical_embeddings)
@@ -174,24 +203,31 @@ class ClusterHistory:
 
             # Get the ID of the most similar historical entry
             most_similar_id = None
-            if max_idx < len(self.entries):
-                most_similar_id = self.entries[max_idx].get('id')
+            if max_idx < len(filtered_entries):
+                most_similar_id = filtered_entries[max_idx].get('id')
 
-            is_duplicate = max_sim >= duplicate_threshold
+            # Step 5-bis: Distinction between exact duplicate and recurring theme
+            is_exact_duplicate = max_sim >= exact_dup_threshold
+            is_recurring = (max_sim >= tau) and not is_exact_duplicate
 
             results.append(SimilarityResult(
                 max_similarity=max_sim,
                 most_similar_id=most_similar_id,
-                is_duplicate=is_duplicate
+                is_duplicate=is_exact_duplicate,
+                is_recurring=is_recurring
             ))
 
         # Log summary
-        duplicates_count = sum(1 for r in results if r.is_duplicate)
+        exact_dup_count = sum(1 for r in results if r.is_duplicate)
+        recurring_count = sum(1 for r in results if r.is_recurring)
+        novel_count = len(results) - exact_dup_count - recurring_count
+
         if results:
             avg_sim = np.mean([r.max_similarity for r in results])
             logger.info(
-                f"Similarity analysis: {duplicates_count}/{len(results)} duplicates "
-                f"(threshold={duplicate_threshold:.2f}), avg_similarity={avg_sim:.3f}"
+                f"Similarity analysis (window={window_days or 'all'} days): "
+                f"novel={novel_count}, recurring={recurring_count}, exact_dup={exact_dup_count} "
+                f"(tau={tau:.2f}, exact_dup_thresh={exact_dup_threshold:.3f}), avg_sim={avg_sim:.3f}"
             )
 
         return results
@@ -199,22 +235,27 @@ class ClusterHistory:
     def compute_similarity_penalty(
         self,
         new_embeddings: np.ndarray,
-        penalty_factor: float = 0.3
+        tau: float = 0.90,
+        alpha: float = 0.5,
+        window_days: Optional[int] = None
     ) -> np.ndarray:
         """
-        Compute similarity penalty for new clusters based on history.
+        Compute gradual similarity penalty for new clusters based on history.
 
-        Penalty formula:
-        penalty = penalty_factor * max_similarity_to_history
+        Step 5-bis formula:
+        penalty = max(0, sim_max - tau)  # Only penalize above safe threshold
+        score_adjustment = 1 - alpha * penalty
 
         Args:
             new_embeddings: Array of new cluster embeddings (N, D)
-            penalty_factor: Penalty strength (0-1), default 0.3
+            tau: Safe threshold - below this, no penalty (default 0.90)
+            alpha: Penalty multiplier (0-1), how aggressively to penalize (default 0.5)
+            window_days: If provided, only compare against last N days of history
 
         Returns:
-            Array of penalties (N,), in range [0, penalty_factor]
+            Array of penalties (N,), in range [0, alpha * (1 - tau)]
         """
-        historical_embeddings = self.get_embeddings()
+        historical_embeddings, _ = self.get_embeddings(window_days=window_days)
 
         if len(historical_embeddings) == 0:
             logger.info("No historical embeddings, no penalty applied")
@@ -226,14 +267,16 @@ class ClusterHistory:
         # Max similarity to any historical cluster
         max_similarities = np.max(similarities, axis=1)
 
-        # Compute penalty
-        penalties = penalty_factor * max_similarities
+        # Step 5-bis: Gradual penalty only above tau
+        raw_penalties = np.maximum(0.0, max_similarities - tau)
+        penalties = alpha * raw_penalties
 
+        # Stats for logging
+        above_tau_count = np.sum(max_similarities >= tau)
         logger.info(
-            f"Computed similarity penalties: "
-            f"mean={np.mean(penalties):.3f}, "
-            f"max={np.max(penalties):.3f}, "
-            f"min={np.min(penalties):.3f}"
+            f"Computed gradual penalties (tau={tau:.2f}, alpha={alpha:.2f}): "
+            f"{above_tau_count}/{len(new_embeddings)} above tau, "
+            f"mean_penalty={np.mean(penalties):.3f}, max_penalty={np.max(penalties):.3f}"
         )
 
         return penalties
@@ -242,31 +285,38 @@ class ClusterHistory:
         self,
         priority_scores: np.ndarray,
         new_embeddings: np.ndarray,
-        penalty_factor: float = 0.3
+        tau: float = 0.90,
+        alpha: float = 0.5,
+        window_days: Optional[int] = None
     ) -> np.ndarray:
         """
-        Apply similarity penalty to priority scores.
+        Apply gradual similarity penalty to priority scores.
 
-        Formula:
-        adjusted_score = priority_score * (1 - penalty_factor * max_similarity)
+        Step 5-bis Formula:
+        penalty = max(0, sim_max - tau)
+        adjusted_score = priority_score * (1 - alpha * penalty)
 
         Args:
             priority_scores: Array of priority scores (N,)
             new_embeddings: Array of new cluster embeddings (N, D)
-            penalty_factor: Penalty strength (0-1)
+            tau: Safe threshold - below this, no penalty (default 0.90)
+            alpha: Penalty multiplier (0-1), default 0.5
+            window_days: If provided, only compare against last N days of history
 
         Returns:
             Array of adjusted priority scores (N,)
         """
-        penalties = self.compute_similarity_penalty(new_embeddings, penalty_factor)
+        penalties = self.compute_similarity_penalty(
+            new_embeddings, tau=tau, alpha=alpha, window_days=window_days
+        )
 
         # Apply multiplicative penalty
         adjusted_scores = priority_scores * (1 - penalties)
 
         # Log significant penalties
-        significant_penalty_indices = np.where(penalties > 0.1)[0]
+        significant_penalty_indices = np.where(penalties > 0.01)[0]
         if len(significant_penalty_indices) > 0:
-            logger.info(f"Applied significant penalties to {len(significant_penalty_indices)} clusters:")
+            logger.info(f"Applied gradual penalties to {len(significant_penalty_indices)} clusters:")
             for idx in significant_penalty_indices[:5]:  # Show top 5
                 logger.info(
                     f"  Cluster {idx}: {priority_scores[idx]:.2f} → {adjusted_scores[idx]:.2f} "

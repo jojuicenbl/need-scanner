@@ -61,7 +61,9 @@ def init_database(db_path: Optional[Path] = None) -> None:
             summary_cost_usd REAL,
             csv_path TEXT,
             json_path TEXT,
-            notes TEXT
+            notes TEXT,
+            -- Step 5-bis: Run stats for instrumentation
+            run_stats TEXT
         )
     """)
 
@@ -97,10 +99,12 @@ def init_database(db_path: Optional[Path] = None) -> None:
             source_mix TEXT,
             example_urls TEXT,
             created_at TIMESTAMP NOT NULL,
-            -- Step 5.1: Inter-day deduplication
+            -- Step 5.1 / 5-bis: Inter-day deduplication
             max_similarity_with_history REAL,
             duplicate_of_insight_id TEXT,
             is_historical_duplicate INTEGER DEFAULT 0,
+            is_recurring_theme INTEGER DEFAULT 0,
+            was_readded_by_fallback INTEGER DEFAULT 0,
             -- Step 5.2: SaaS-ability / Productizability
             solution_type TEXT,
             recurring_revenue_potential REAL,
@@ -186,10 +190,12 @@ def _migrate_database(db_path: Path) -> None:
 
     # New columns to add (Step 5 improvements)
     new_columns = [
-        # Step 5.1: Inter-day deduplication
+        # Step 5.1 / 5-bis: Inter-day deduplication
         ("max_similarity_with_history", "REAL"),
         ("duplicate_of_insight_id", "TEXT"),
         ("is_historical_duplicate", "INTEGER DEFAULT 0"),
+        ("is_recurring_theme", "INTEGER DEFAULT 0"),
+        ("was_readded_by_fallback", "INTEGER DEFAULT 0"),
         # Step 5.2: SaaS-ability / Productizability
         ("solution_type", "TEXT"),
         ("recurring_revenue_potential", "REAL"),
@@ -210,6 +216,17 @@ def _migrate_database(db_path: Path) -> None:
             except sqlite3.OperationalError as e:
                 # Column might already exist in some edge cases
                 logger.debug(f"Could not add column {column_name}: {e}")
+
+    # Migrate runs table for Step 5-bis stats
+    cursor.execute("PRAGMA table_info(runs)")
+    runs_columns = {row[1] for row in cursor.fetchall()}
+
+    if "run_stats" not in runs_columns:
+        try:
+            cursor.execute("ALTER TABLE runs ADD COLUMN run_stats TEXT")
+            logger.info("Migration: Added column 'run_stats' to runs table")
+        except sqlite3.OperationalError as e:
+            logger.debug(f"Could not add column run_stats: {e}")
 
     conn.commit()
     conn.close()
@@ -232,6 +249,7 @@ def save_run(
     csv_path: Optional[str] = None,
     json_path: Optional[str] = None,
     notes: Optional[str] = None,
+    run_stats: Optional[Dict] = None,
     db_path: Optional[Path] = None
 ) -> None:
     """
@@ -249,18 +267,22 @@ def save_run(
         csv_path: Path to generated CSV
         json_path: Path to generated JSON
         notes: Optional notes
+        run_stats: Step 5-bis instrumentation stats (optional)
         db_path: Database path (optional)
     """
     db_path = get_db_path(db_path)
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
 
+    # Serialize run_stats to JSON if provided
+    run_stats_json = json.dumps(run_stats) if run_stats else None
+
     cursor.execute("""
         INSERT INTO runs (
             id, created_at, config_name, mode, nb_insights, nb_clusters,
             total_cost_usd, embed_cost_usd, summary_cost_usd,
-            csv_path, json_path, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            csv_path, json_path, notes, run_stats
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         run_id,
         datetime.now(),
@@ -273,7 +295,8 @@ def save_run(
         summary_cost_usd,
         csv_path,
         json_path,
-        notes
+        notes,
+        run_stats_json
     ))
 
     conn.commit()
@@ -326,10 +349,11 @@ def save_insights(
                 priority_score, priority_score_adjusted,
                 keywords_matched, source_mix, example_urls, created_at,
                 max_similarity_with_history, duplicate_of_insight_id, is_historical_duplicate,
+                is_recurring_theme, was_readded_by_fallback,
                 solution_type, recurring_revenue_potential, saas_viable,
                 product_angle_title, product_angle_summary, product_angle_type,
                 product_pricing_hint, product_complexity
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             insight_id,
             run_id,
@@ -360,10 +384,12 @@ def save_insights(
             source_mix_str,
             example_urls,
             created_at,
-            # Step 5.1: Inter-day deduplication
+            # Step 5.1 / 5-bis: Inter-day deduplication
             insight.max_similarity_with_history,
             insight.duplicate_of_insight_id,
             1 if insight.is_historical_duplicate else 0,
+            1 if insight.is_recurring_theme else 0,
+            1 if insight.was_readded_by_fallback else 0,
             # Step 5.2: SaaS-ability / Productizability
             insight.solution_type,
             insight.recurring_revenue_potential,
