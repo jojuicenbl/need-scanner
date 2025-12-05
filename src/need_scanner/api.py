@@ -223,8 +223,17 @@ async def root():
 @app.get("/health", tags=["General"])
 async def health_check():
     """Health check endpoint."""
+    from .database import check_db_connection
+
+    db_healthy = False
+    try:
+        db_healthy = check_db_connection()
+    except Exception as e:
+        logger.warning(f"Database health check failed: {e}")
+
     return {
-        "status": "healthy",
+        "status": "healthy" if db_healthy else "degraded",
+        "database": "connected" if db_healthy else "disconnected",
         "timestamp": datetime.now().isoformat()
     }
 

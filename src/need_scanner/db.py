@@ -1,235 +1,90 @@
-"""SQLite database management for Need Scanner runs and insights."""
+"""Database operations for Need Scanner - PostgreSQL with SQLAlchemy.
 
-import sqlite3
+This module provides the public API for database operations.
+It uses SQLAlchemy ORM with PostgreSQL (via Supabase or local).
+
+Environment Variables:
+    DATABASE_URL: PostgreSQL connection string (required)
+        Example: postgresql+psycopg2://user:password@localhost:5432/needscanner
+
+Migration from SQLite:
+    This module replaces the old SQLite-based implementation.
+    See docs/DB_MIGRATION.md for migration instructions.
+"""
+
 import json
-from pathlib import Path
-from typing import List, Dict, Optional, Tuple
 from datetime import datetime
+from typing import List, Dict, Optional
+from pathlib import Path
+
 from loguru import logger
+from sqlalchemy import desc
+from sqlalchemy.orm import Session
 
+from .database import (
+    get_session,
+    get_db_session,
+    init_db,
+    check_db_connection,
+    Run,
+    Insight,
+    InsightExploration,
+)
+from .database.config import DatabaseConfigError
 from .schemas import EnrichedInsight
-
-
-# Default database path
-DEFAULT_DB_PATH = Path("data/needscanner.db")
-
-
-def get_db_path(custom_path: Optional[Path] = None) -> Path:
-    """Get database path from config or use default."""
-    if custom_path:
-        return custom_path
-
-    # Try to get from environment or config
-    import os
-    env_path = os.getenv("NEEDSCANNER_DB_PATH")
-    if env_path:
-        return Path(env_path)
-
-    return DEFAULT_DB_PATH
 
 
 def init_database(db_path: Optional[Path] = None) -> None:
     """
-    Initialize database with required tables.
+    Initialize database connection and verify schema.
 
-    Creates tables if they don't exist:
-    - runs: metadata about each scan run
-    - insights: individual insights from each run
+    Note: db_path parameter is kept for backwards compatibility but is ignored.
+    The database URL is read from DATABASE_URL environment variable.
 
     Args:
-        db_path: Path to SQLite database file (optional)
+        db_path: Ignored (kept for backwards compatibility)
+
+    Raises:
+        DatabaseConfigError: If DATABASE_URL is not set
     """
-    db_path = get_db_path(db_path)
-
-    # Ensure parent directory exists
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    # Create runs table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS runs (
-            id TEXT PRIMARY KEY,
-            created_at TIMESTAMP NOT NULL,
-            config_name TEXT,
-            mode TEXT,
-            nb_insights INTEGER,
-            nb_clusters INTEGER,
-            total_cost_usd REAL,
-            embed_cost_usd REAL,
-            summary_cost_usd REAL,
-            csv_path TEXT,
-            json_path TEXT,
-            notes TEXT,
-            -- Step 5-bis: Run stats for instrumentation
-            run_stats TEXT
+    if db_path is not None:
+        logger.warning(
+            "db_path parameter is deprecated and ignored. "
+            "Use DATABASE_URL environment variable instead."
         )
-    """)
 
-    # Create insights table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS insights (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            rank INTEGER,
-            mmr_rank INTEGER,
-            cluster_id INTEGER,
-            size INTEGER,
-            sector TEXT,
-            title TEXT NOT NULL,
-            problem TEXT,
-            persona TEXT,
-            jtbd TEXT,
-            context TEXT,
-            mvp TEXT,
-            alternatives TEXT,
-            willingness_to_pay_signal TEXT,
-            monetizable INTEGER,
-            pain_score_llm REAL,
-            pain_score_final REAL,
-            heuristic_score REAL,
-            traction_score REAL,
-            novelty_score REAL,
-            trend_score REAL,
-            founder_fit_score REAL,
-            priority_score REAL,
-            priority_score_adjusted REAL,
-            keywords_matched TEXT,
-            source_mix TEXT,
-            example_urls TEXT,
-            created_at TIMESTAMP NOT NULL,
-            -- Step 5.1 / 5-bis: Inter-day deduplication
-            max_similarity_with_history REAL,
-            duplicate_of_insight_id TEXT,
-            is_historical_duplicate INTEGER DEFAULT 0,
-            is_recurring_theme INTEGER DEFAULT 0,
-            was_readded_by_fallback INTEGER DEFAULT 0,
-            -- Step 5.2: SaaS-ability / Productizability
-            solution_type TEXT,
-            recurring_revenue_potential REAL,
-            saas_viable INTEGER,
-            -- Step 5.3: Product Ideation
-            product_angle_title TEXT,
-            product_angle_summary TEXT,
-            product_angle_type TEXT,
-            product_pricing_hint TEXT,
-            product_complexity INTEGER,
-            FOREIGN KEY (run_id) REFERENCES runs(id)
-        )
-    """)
-
-    # Create insight_explorations table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS insight_explorations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            insight_id TEXT NOT NULL,
-            created_at TIMESTAMP NOT NULL,
-            model_used TEXT,
-            exploration_text TEXT NOT NULL,
-            monetization_hypotheses TEXT,
-            product_variants TEXT,
-            validation_steps TEXT,
-            FOREIGN KEY (insight_id) REFERENCES insights(id)
-        )
-    """)
-
-    # Create indexes for common queries
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_insights_run_id
-        ON insights(run_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_insights_rank
-        ON insights(rank)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_insights_priority
-        ON insights(priority_score DESC)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_insights_sector
-        ON insights(sector)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_runs_created
-        ON runs(created_at DESC)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_explorations_insight
-        ON insight_explorations(insight_id)
-    """)
-
-    conn.commit()
-    conn.close()
-
-    # Run migrations for existing databases
-    _migrate_database(db_path)
-
-    logger.info(f"Database initialized at {db_path}")
+    try:
+        # Verify connection works
+        check_db_connection()
+        logger.info("Database connection verified (PostgreSQL)")
+    except DatabaseConfigError as e:
+        logger.error(str(e))
+        raise
+    except Exception as e:
+        logger.error(f"Failed to connect to database: {e}")
+        raise
 
 
-def _migrate_database(db_path: Path) -> None:
+def get_db_path(custom_path: Optional[Path] = None) -> str:
     """
-    Apply database migrations for new columns.
+    Get database connection info (for logging purposes).
 
-    This function adds new columns to existing tables if they don't exist.
-    Safe to run multiple times.
+    Note: This function is kept for backwards compatibility.
+    Returns a descriptive string instead of a path.
+
+    Args:
+        custom_path: Ignored (kept for backwards compatibility)
+
+    Returns:
+        String describing the database connection
     """
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
+    if custom_path is not None:
+        logger.warning(
+            "custom_path parameter is deprecated and ignored. "
+            "Use DATABASE_URL environment variable instead."
+        )
 
-    # Get current columns in insights table
-    cursor.execute("PRAGMA table_info(insights)")
-    existing_columns = {row[1] for row in cursor.fetchall()}
-
-    # New columns to add (Step 5 improvements)
-    new_columns = [
-        # Step 5.1 / 5-bis: Inter-day deduplication
-        ("max_similarity_with_history", "REAL"),
-        ("duplicate_of_insight_id", "TEXT"),
-        ("is_historical_duplicate", "INTEGER DEFAULT 0"),
-        ("is_recurring_theme", "INTEGER DEFAULT 0"),
-        ("was_readded_by_fallback", "INTEGER DEFAULT 0"),
-        # Step 5.2: SaaS-ability / Productizability
-        ("solution_type", "TEXT"),
-        ("recurring_revenue_potential", "REAL"),
-        ("saas_viable", "INTEGER"),
-        # Step 5.3: Product Ideation
-        ("product_angle_title", "TEXT"),
-        ("product_angle_summary", "TEXT"),
-        ("product_angle_type", "TEXT"),
-        ("product_pricing_hint", "TEXT"),
-        ("product_complexity", "INTEGER"),
-    ]
-
-    for column_name, column_type in new_columns:
-        if column_name not in existing_columns:
-            try:
-                cursor.execute(f"ALTER TABLE insights ADD COLUMN {column_name} {column_type}")
-                logger.info(f"Migration: Added column '{column_name}' to insights table")
-            except sqlite3.OperationalError as e:
-                # Column might already exist in some edge cases
-                logger.debug(f"Could not add column {column_name}: {e}")
-
-    # Migrate runs table for Step 5-bis stats
-    cursor.execute("PRAGMA table_info(runs)")
-    runs_columns = {row[1] for row in cursor.fetchall()}
-
-    if "run_stats" not in runs_columns:
-        try:
-            cursor.execute("ALTER TABLE runs ADD COLUMN run_stats TEXT")
-            logger.info("Migration: Added column 'run_stats' to runs table")
-        except sqlite3.OperationalError as e:
-            logger.debug(f"Could not add column run_stats: {e}")
-
-    conn.commit()
-    conn.close()
+    return "PostgreSQL (via DATABASE_URL)"
 
 
 def generate_run_id() -> str:
@@ -268,39 +123,32 @@ def save_run(
         json_path: Path to generated JSON
         notes: Optional notes
         run_stats: Step 5-bis instrumentation stats (optional)
-        db_path: Database path (optional)
+        db_path: Ignored (kept for backwards compatibility)
     """
-    db_path = get_db_path(db_path)
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
+    if db_path is not None:
+        logger.warning("db_path parameter is deprecated and ignored.")
 
     # Serialize run_stats to JSON if provided
     run_stats_json = json.dumps(run_stats) if run_stats else None
 
-    cursor.execute("""
-        INSERT INTO runs (
-            id, created_at, config_name, mode, nb_insights, nb_clusters,
-            total_cost_usd, embed_cost_usd, summary_cost_usd,
-            csv_path, json_path, notes, run_stats
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        run_id,
-        datetime.now(),
-        config_name,
-        mode,
-        nb_insights,
-        nb_clusters,
-        total_cost_usd,
-        embed_cost_usd,
-        summary_cost_usd,
-        csv_path,
-        json_path,
-        notes,
-        run_stats_json
-    ))
-
-    conn.commit()
-    conn.close()
+    with get_db_session() as db:
+        run = Run(
+            id=run_id,
+            created_at=datetime.now(),
+            config_name=config_name,
+            mode=mode,
+            nb_insights=nb_insights,
+            nb_clusters=nb_clusters,
+            total_cost_usd=total_cost_usd,
+            embed_cost_usd=embed_cost_usd,
+            summary_cost_usd=summary_cost_usd,
+            csv_path=csv_path,
+            json_path=json_path,
+            notes=notes,
+            run_stats=run_stats_json,
+        )
+        db.add(run)
+        # Commit happens automatically in context manager
 
     logger.info(f"Saved run {run_id} to database")
 
@@ -316,121 +164,95 @@ def save_insights(
     Args:
         run_id: Run identifier
         insights: List of EnrichedInsight objects
-        db_path: Database path (optional)
+        db_path: Ignored (kept for backwards compatibility)
     """
-    db_path = get_db_path(db_path)
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
+    if db_path is not None:
+        logger.warning("db_path parameter is deprecated and ignored.")
 
     created_at = datetime.now()
 
-    for insight in insights:
-        # Generate unique insight ID
-        insight_id = f"{run_id}_cluster_{insight.cluster_id}"
+    with get_db_session() as db:
+        for insight in insights:
+            # Generate unique insight ID
+            insight_id = f"{run_id}_cluster_{insight.cluster_id}"
 
-        # Prepare data
-        alternatives_str = json.dumps(insight.summary.alternatives) if insight.summary.alternatives else None
-        keywords_str = json.dumps(insight.keywords_matched) if insight.keywords_matched else None
-        source_mix_str = json.dumps(insight.source_mix) if insight.source_mix else None
+            # Prepare JSON data
+            alternatives_str = json.dumps(insight.summary.alternatives) if insight.summary.alternatives else None
+            keywords_str = json.dumps(insight.keywords_matched) if insight.keywords_matched else None
+            source_mix_str = json.dumps(insight.source_mix) if insight.source_mix else None
 
-        # Get example URLs
-        example_urls = None
-        if insight.examples:
-            urls = [ex.get('url', '') for ex in insight.examples[:3] if ex.get('url')]
-            example_urls = json.dumps(urls) if urls else None
+            # Get example URLs
+            example_urls = None
+            if insight.examples:
+                urls = [ex.get('url', '') for ex in insight.examples[:3] if ex.get('url')]
+                example_urls = json.dumps(urls) if urls else None
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO insights (
-                id, run_id, rank, mmr_rank, cluster_id, size, sector,
-                title, problem, persona, jtbd, context, mvp,
-                alternatives, willingness_to_pay_signal, monetizable,
-                pain_score_llm, pain_score_final, heuristic_score,
-                traction_score, novelty_score, trend_score, founder_fit_score,
-                priority_score, priority_score_adjusted,
-                keywords_matched, source_mix, example_urls, created_at,
-                max_similarity_with_history, duplicate_of_insight_id, is_historical_duplicate,
-                is_recurring_theme, was_readded_by_fallback,
-                solution_type, recurring_revenue_potential, saas_viable,
-                product_angle_title, product_angle_summary, product_angle_type,
-                product_pricing_hint, product_complexity
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            insight_id,
-            run_id,
-            insight.rank,
-            insight.mmr_rank,
-            insight.cluster_id,
-            insight.summary.size,
-            insight.summary.sector,
-            insight.summary.title,
-            insight.summary.problem,
-            insight.summary.persona,
-            insight.summary.jtbd,
-            insight.summary.context,
-            insight.summary.mvp,
-            alternatives_str,
-            insight.summary.willingness_to_pay_signal,
-            1 if insight.summary.monetizable else 0,
-            insight.summary.pain_score_llm,
-            insight.pain_score_final,
-            insight.heuristic_score,
-            insight.traction_score,
-            insight.novelty_score,
-            insight.trend_score,
-            insight.founder_fit_score,
-            insight.priority_score,
-            insight.priority_score_adjusted,
-            keywords_str,
-            source_mix_str,
-            example_urls,
-            created_at,
-            # Step 5.1 / 5-bis: Inter-day deduplication
-            insight.max_similarity_with_history,
-            insight.duplicate_of_insight_id,
-            1 if insight.is_historical_duplicate else 0,
-            1 if insight.is_recurring_theme else 0,
-            1 if insight.was_readded_by_fallback else 0,
-            # Step 5.2: SaaS-ability / Productizability
-            insight.solution_type,
-            insight.recurring_revenue_potential,
-            1 if insight.saas_viable else (0 if insight.saas_viable is False else None),
-            # Step 5.3: Product Ideation
-            insight.product_angle_title,
-            insight.product_angle_summary,
-            insight.product_angle_type,
-            insight.product_pricing_hint,
-            insight.product_complexity
-        ))
+            # Create insight record
+            insight_record = Insight(
+                id=insight_id,
+                run_id=run_id,
+                rank=insight.rank,
+                mmr_rank=insight.mmr_rank,
+                cluster_id=insight.cluster_id,
+                size=insight.summary.size,
+                sector=insight.summary.sector,
+                title=insight.summary.title,
+                problem=insight.summary.problem,
+                persona=insight.summary.persona,
+                jtbd=insight.summary.jtbd,
+                context=insight.summary.context,
+                mvp=insight.summary.mvp,
+                alternatives=alternatives_str,
+                willingness_to_pay_signal=insight.summary.willingness_to_pay_signal,
+                monetizable=1 if insight.summary.monetizable else 0,
+                pain_score_llm=insight.summary.pain_score_llm,
+                pain_score_final=insight.pain_score_final,
+                heuristic_score=insight.heuristic_score,
+                traction_score=insight.traction_score,
+                novelty_score=insight.novelty_score,
+                trend_score=insight.trend_score,
+                founder_fit_score=insight.founder_fit_score,
+                priority_score=insight.priority_score,
+                priority_score_adjusted=insight.priority_score_adjusted,
+                keywords_matched=keywords_str,
+                source_mix=source_mix_str,
+                example_urls=example_urls,
+                created_at=created_at,
+                # Step 5.1 / 5-bis: Inter-day deduplication
+                max_similarity_with_history=insight.max_similarity_with_history,
+                duplicate_of_insight_id=insight.duplicate_of_insight_id,
+                is_historical_duplicate=1 if insight.is_historical_duplicate else 0,
+                is_recurring_theme=1 if insight.is_recurring_theme else 0,
+                was_readded_by_fallback=1 if insight.was_readded_by_fallback else 0,
+                # Step 5.2: SaaS-ability / Productizability
+                solution_type=insight.solution_type,
+                recurring_revenue_potential=insight.recurring_revenue_potential,
+                saas_viable=1 if insight.saas_viable else (0 if insight.saas_viable is False else None),
+                # Step 5.3: Product Ideation
+                product_angle_title=insight.product_angle_title,
+                product_angle_summary=insight.product_angle_summary,
+                product_angle_type=insight.product_angle_type,
+                product_pricing_hint=insight.product_pricing_hint,
+                product_complexity=insight.product_complexity,
+            )
 
-    conn.commit()
-    conn.close()
+            # Use merge to handle INSERT OR REPLACE behavior
+            db.merge(insight_record)
 
     logger.info(f"Saved {len(insights)} insights to database for run {run_id}")
 
 
 def get_latest_run(db_path: Optional[Path] = None) -> Optional[Dict]:
     """Get most recent run metadata."""
-    db_path = get_db_path(db_path)
+    if db_path is not None:
+        logger.warning("db_path parameter is deprecated and ignored.")
 
-    if not db_path.exists():
+    with get_db_session() as db:
+        run = db.query(Run).order_by(desc(Run.created_at)).first()
+
+        if run:
+            return _run_to_dict(run)
         return None
-
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT * FROM runs
-        ORDER BY created_at DESC
-        LIMIT 1
-    """)
-
-    row = cursor.fetchone()
-    conn.close()
-
-    if row:
-        return dict(row)
-    return None
 
 
 def get_run_insights(
@@ -444,31 +266,22 @@ def get_run_insights(
     Args:
         run_id: Run identifier
         limit: Optional limit on number of insights
-        db_path: Database path (optional)
+        db_path: Ignored (kept for backwards compatibility)
 
     Returns:
         List of insight dictionaries
     """
-    db_path = get_db_path(db_path)
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    if db_path is not None:
+        logger.warning("db_path parameter is deprecated and ignored.")
 
-    query = """
-        SELECT * FROM insights
-        WHERE run_id = ?
-        ORDER BY rank ASC
-    """
+    with get_db_session() as db:
+        query = db.query(Insight).filter(Insight.run_id == run_id).order_by(Insight.rank)
 
-    if limit:
-        query += f" LIMIT {limit}"
+        if limit:
+            query = query.limit(limit)
 
-    cursor.execute(query, (run_id,))
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    return [dict(row) for row in rows]
+        insights = query.all()
+        return [_insight_to_dict(i) for i in insights]
 
 
 def list_runs(
@@ -480,30 +293,17 @@ def list_runs(
 
     Args:
         limit: Maximum number of runs to return
-        db_path: Database path (optional)
+        db_path: Ignored (kept for backwards compatibility)
 
     Returns:
         List of run dictionaries
     """
-    db_path = get_db_path(db_path)
+    if db_path is not None:
+        logger.warning("db_path parameter is deprecated and ignored.")
 
-    if not db_path.exists():
-        return []
-
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT * FROM runs
-        ORDER BY created_at DESC
-        LIMIT ?
-    """, (limit,))
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    return [dict(row) for row in rows]
+    with get_db_session() as db:
+        runs = db.query(Run).order_by(desc(Run.created_at)).limit(limit).all()
+        return [_run_to_dict(r) for r in runs]
 
 
 def query_insights(
@@ -523,47 +323,33 @@ def query_insights(
         min_founder_fit: Minimum founder fit score
         monetizable_only: Only monetizable insights
         limit: Maximum results
-        db_path: Database path (optional)
+        db_path: Ignored (kept for backwards compatibility)
 
     Returns:
         List of matching insights
     """
-    db_path = get_db_path(db_path)
+    if db_path is not None:
+        logger.warning("db_path parameter is deprecated and ignored.")
 
-    if not db_path.exists():
-        return []
+    with get_db_session() as db:
+        query = db.query(Insight)
 
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+        if sector:
+            query = query.filter(Insight.sector == sector)
 
-    query = "SELECT * FROM insights WHERE 1=1"
-    params = []
+        if min_priority is not None:
+            query = query.filter(Insight.priority_score >= min_priority)
 
-    if sector:
-        query += " AND sector = ?"
-        params.append(sector)
+        if min_founder_fit is not None:
+            query = query.filter(Insight.founder_fit_score >= min_founder_fit)
 
-    if min_priority is not None:
-        query += " AND priority_score >= ?"
-        params.append(min_priority)
+        if monetizable_only:
+            query = query.filter(Insight.monetizable == 1)
 
-    if min_founder_fit is not None:
-        query += " AND founder_fit_score >= ?"
-        params.append(min_founder_fit)
+        query = query.order_by(desc(Insight.priority_score)).limit(limit)
 
-    if monetizable_only:
-        query += " AND monetizable = 1"
-
-    query += " ORDER BY priority_score DESC LIMIT ?"
-    params.append(limit)
-
-    cursor.execute(query, params)
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    return [dict(row) for row in rows]
+        insights = query.all()
+        return [_insight_to_dict(i) for i in insights]
 
 
 def get_insight_by_id(
@@ -575,31 +361,20 @@ def get_insight_by_id(
 
     Args:
         insight_id: Insight identifier
-        db_path: Database path (optional)
+        db_path: Ignored (kept for backwards compatibility)
 
     Returns:
         Insight dictionary or None if not found
     """
-    db_path = get_db_path(db_path)
+    if db_path is not None:
+        logger.warning("db_path parameter is deprecated and ignored.")
 
-    if not db_path.exists():
+    with get_db_session() as db:
+        insight = db.query(Insight).filter(Insight.id == insight_id).first()
+
+        if insight:
+            return _insight_to_dict(insight)
         return None
-
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT * FROM insights
-        WHERE id = ?
-    """, (insight_id,))
-
-    row = cursor.fetchone()
-    conn.close()
-
-    if row:
-        return dict(row)
-    return None
 
 
 def save_exploration(
@@ -621,33 +396,27 @@ def save_exploration(
         monetization_hypotheses: JSON string of monetization ideas
         product_variants: JSON string of product variants
         validation_steps: JSON string of validation steps
-        db_path: Database path (optional)
+        db_path: Ignored (kept for backwards compatibility)
 
     Returns:
         exploration_id: ID of the created exploration
     """
-    db_path = get_db_path(db_path)
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
+    if db_path is not None:
+        logger.warning("db_path parameter is deprecated and ignored.")
 
-    cursor.execute("""
-        INSERT INTO insight_explorations (
-            insight_id, created_at, model_used, exploration_text,
-            monetization_hypotheses, product_variants, validation_steps
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        insight_id,
-        datetime.now(),
-        model_used,
-        exploration_text,
-        monetization_hypotheses,
-        product_variants,
-        validation_steps
-    ))
-
-    exploration_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    with get_db_session() as db:
+        exploration = InsightExploration(
+            insight_id=insight_id,
+            created_at=datetime.now(),
+            model_used=model_used,
+            exploration_text=exploration_text,
+            monetization_hypotheses=monetization_hypotheses,
+            product_variants=product_variants,
+            validation_steps=validation_steps,
+        )
+        db.add(exploration)
+        db.flush()  # Get the auto-generated ID
+        exploration_id = exploration.id
 
     logger.info(f"Saved exploration {exploration_id} for insight {insight_id}")
     return exploration_id
@@ -662,27 +431,107 @@ def get_explorations_for_insight(
 
     Args:
         insight_id: Insight identifier
-        db_path: Database path (optional)
+        db_path: Ignored (kept for backwards compatibility)
 
     Returns:
         List of exploration dictionaries
     """
-    db_path = get_db_path(db_path)
+    if db_path is not None:
+        logger.warning("db_path parameter is deprecated and ignored.")
 
-    if not db_path.exists():
-        return []
+    with get_db_session() as db:
+        explorations = (
+            db.query(InsightExploration)
+            .filter(InsightExploration.insight_id == insight_id)
+            .order_by(desc(InsightExploration.created_at))
+            .all()
+        )
+        return [_exploration_to_dict(e) for e in explorations]
 
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT * FROM insight_explorations
-        WHERE insight_id = ?
-        ORDER BY created_at DESC
-    """, (insight_id,))
+# ============================================================================
+# Helper functions to convert ORM objects to dictionaries
+# ============================================================================
 
-    rows = cursor.fetchall()
-    conn.close()
+def _run_to_dict(run: Run) -> Dict:
+    """Convert Run ORM object to dictionary."""
+    return {
+        "id": run.id,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "config_name": run.config_name,
+        "mode": run.mode,
+        "nb_insights": run.nb_insights,
+        "nb_clusters": run.nb_clusters,
+        "total_cost_usd": run.total_cost_usd,
+        "embed_cost_usd": run.embed_cost_usd,
+        "summary_cost_usd": run.summary_cost_usd,
+        "csv_path": run.csv_path,
+        "json_path": run.json_path,
+        "notes": run.notes,
+        "run_stats": run.run_stats,
+    }
 
-    return [dict(row) for row in rows]
+
+def _insight_to_dict(insight: Insight) -> Dict:
+    """Convert Insight ORM object to dictionary."""
+    return {
+        "id": insight.id,
+        "run_id": insight.run_id,
+        "rank": insight.rank,
+        "mmr_rank": insight.mmr_rank,
+        "cluster_id": insight.cluster_id,
+        "size": insight.size,
+        "sector": insight.sector,
+        "title": insight.title,
+        "problem": insight.problem,
+        "persona": insight.persona,
+        "jtbd": insight.jtbd,
+        "context": insight.context,
+        "mvp": insight.mvp,
+        "alternatives": insight.alternatives,
+        "willingness_to_pay_signal": insight.willingness_to_pay_signal,
+        "monetizable": insight.monetizable,
+        "pain_score_llm": insight.pain_score_llm,
+        "pain_score_final": insight.pain_score_final,
+        "heuristic_score": insight.heuristic_score,
+        "traction_score": insight.traction_score,
+        "novelty_score": insight.novelty_score,
+        "trend_score": insight.trend_score,
+        "founder_fit_score": insight.founder_fit_score,
+        "priority_score": insight.priority_score,
+        "priority_score_adjusted": insight.priority_score_adjusted,
+        "keywords_matched": insight.keywords_matched,
+        "source_mix": insight.source_mix,
+        "example_urls": insight.example_urls,
+        "created_at": insight.created_at.isoformat() if insight.created_at else None,
+        # Step 5.1 / 5-bis
+        "max_similarity_with_history": insight.max_similarity_with_history,
+        "duplicate_of_insight_id": insight.duplicate_of_insight_id,
+        "is_historical_duplicate": insight.is_historical_duplicate,
+        "is_recurring_theme": insight.is_recurring_theme,
+        "was_readded_by_fallback": insight.was_readded_by_fallback,
+        # Step 5.2
+        "solution_type": insight.solution_type,
+        "recurring_revenue_potential": insight.recurring_revenue_potential,
+        "saas_viable": insight.saas_viable,
+        # Step 5.3
+        "product_angle_title": insight.product_angle_title,
+        "product_angle_summary": insight.product_angle_summary,
+        "product_angle_type": insight.product_angle_type,
+        "product_pricing_hint": insight.product_pricing_hint,
+        "product_complexity": insight.product_complexity,
+    }
+
+
+def _exploration_to_dict(exploration: InsightExploration) -> Dict:
+    """Convert InsightExploration ORM object to dictionary."""
+    return {
+        "id": exploration.id,
+        "insight_id": exploration.insight_id,
+        "created_at": exploration.created_at.isoformat() if exploration.created_at else None,
+        "model_used": exploration.model_used,
+        "exploration_text": exploration.exploration_text,
+        "monetization_hypotheses": exploration.monetization_hypotheses,
+        "product_variants": exploration.product_variants,
+        "validation_steps": exploration.validation_steps,
+    }
