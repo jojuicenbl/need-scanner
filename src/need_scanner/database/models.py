@@ -1,13 +1,17 @@
 """SQLAlchemy ORM models for Need Scanner.
 
 Tables:
-- runs: Scan run metadata
+- runs: Scan run metadata AND job queue (Step 2 architecture)
 - insights: Individual insights from each run
 - insight_explorations: Deep explorations of insights
 
 Note: Primary keys preserve the existing format (timestamp-based strings)
 for backwards compatibility with existing data. New UUID columns can be
 added later if needed.
+
+Job Queue Architecture (Step 2):
+The `runs` table serves as both job queue and results storage.
+Status lifecycle: queued → running → completed / failed
 """
 
 from datetime import datetime
@@ -29,20 +33,66 @@ from sqlalchemy.orm import declarative_base, relationship
 Base = declarative_base()
 
 
+# Valid job status values
+JOB_STATUS_QUEUED = "queued"
+JOB_STATUS_RUNNING = "running"
+JOB_STATUS_COMPLETED = "completed"
+JOB_STATUS_FAILED = "failed"
+
+VALID_JOB_STATUSES = {JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_COMPLETED, JOB_STATUS_FAILED}
+
+
 class Run(Base):
-    """Scan run metadata."""
+    """Scan run metadata and job queue entry.
+
+    This table serves dual purposes:
+    1. Job queue: tracks pending/running scans with status lifecycle
+    2. Results storage: stores completed scan metadata and statistics
+
+    Status lifecycle:
+    - queued: Job created, waiting for worker to pick it up
+    - running: Worker is processing the scan
+    - completed: Scan finished successfully
+    - failed: Scan failed with an error
+    """
 
     __tablename__ = "runs"
 
     # Primary key: timestamp-based ID like "20251126_143022"
     id = Column(String(50), primary_key=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
-    # Run configuration
+    # =========================================================================
+    # Job Queue Fields (Step 2)
+    # =========================================================================
+
+    # Job status: queued → running → completed / failed
+    status = Column(String(20), nullable=False, default=JOB_STATUS_QUEUED)
+
+    # Job lifecycle timestamps
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Progress tracking (0-100)
+    progress = Column(Integer, nullable=True, default=0)
+
+    # Error details if status == 'failed'
+    error_message = Column(Text, nullable=True)
+
+    # =========================================================================
+    # Run Configuration (job parameters)
+    # =========================================================================
+
     config_name = Column(String(100), nullable=True)
     mode = Column(String(20), nullable=True)  # "light" or "deep"
+    run_mode = Column(String(20), nullable=True, default="discover")  # "discover" or "track"
+    max_insights = Column(Integer, nullable=True)
+    input_pattern = Column(String(255), nullable=True, default="data/raw/posts_*.json")
 
-    # Results summary
+    # =========================================================================
+    # Results Summary (populated after completion)
+    # =========================================================================
+
     nb_insights = Column(Integer, nullable=True)
     nb_clusters = Column(Integer, nullable=True)
 
@@ -59,15 +109,20 @@ class Run(Base):
     notes = Column(Text, nullable=True)
     run_stats = Column(Text, nullable=True)  # JSON string for instrumentation stats
 
+    # =========================================================================
     # Relationships
+    # =========================================================================
+
     insights = relationship("Insight", back_populates="run", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_runs_created_at", created_at.desc()),
+        Index("idx_runs_status", "status"),
+        Index("idx_runs_status_created_at", "status", "created_at"),
     )
 
     def __repr__(self):
-        return f"<Run(id={self.id}, mode={self.mode}, nb_insights={self.nb_insights})>"
+        return f"<Run(id={self.id}, status={self.status}, mode={self.mode}, progress={self.progress})>"
 
 
 class Insight(Base):

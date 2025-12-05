@@ -1,4 +1,14 @@
-"""FastAPI backend for Need Scanner."""
+"""FastAPI backend for Need Scanner.
+
+Step 2 Architecture: Scan Job Queue
+===================================
+- POST /runs: Enqueues a scan job (returns immediately)
+- GET /runs/{run_id}: Poll for job status and progress
+- Worker process picks up jobs and runs scans asynchronously
+
+The HTTP API no longer runs scans synchronously. All scan work
+is done by the worker process (see need_scanner.worker).
+"""
 
 import json
 from typing import Optional, List, Dict, Any
@@ -10,7 +20,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from loguru import logger
 
-from .core import run_scan as core_run_scan
 from .db import (
     init_database,
     list_runs,
@@ -18,7 +27,13 @@ from .db import (
     get_insight_by_id,
     save_exploration,
     get_explorations_for_insight,
-    get_db_path
+    get_db_path,
+    generate_run_id,
+    enqueue_run,
+    get_run_by_id,
+    get_job_status,
+    count_queued_jobs,
+    count_running_jobs,
 )
 from .llm import explore_insight_with_llm
 from .config import get_config
@@ -47,10 +62,14 @@ app.add_middleware(
 # ============================================================================
 
 class ScanRequest(BaseModel):
-    """Request model for creating a new scan."""
+    """Request model for creating a new scan job.
+
+    This creates a job in the queue. The actual scan will be
+    processed by a worker process asynchronously.
+    """
     config_name: Optional[str] = Field(None, description="Configuration name (optional)")
     mode: str = Field("deep", description="Scan mode: 'light' or 'deep'")
-    max_insights: Optional[int] = Field(None, description="Maximum number of insights to generate")
+    max_insights: Optional[int] = Field(None, description="Maximum number of insights to generate", ge=1, le=100)
     input_pattern: str = Field("data/raw/posts_*.json", description="Glob pattern for input files")
     run_mode: str = Field("discover", description="Run mode: 'discover' (filter duplicates/non-SaaS) or 'track' (show all)")
 
@@ -65,21 +84,53 @@ class ScanRequest(BaseModel):
 
 
 class ScanResponse(BaseModel):
-    """Response model for scan creation."""
+    """Response model for scan job creation.
+
+    The job is queued and will be processed by a worker.
+    Poll GET /runs/{run_id} to check progress.
+    """
     run_id: str
-    status: str = "started"
-    message: str
+    status: str = "queued"
+    created_at: str
+    mode: str
+    run_mode: str
+    max_insights: Optional[int]
+    message: str = "Job queued successfully. Poll GET /runs/{run_id} for status."
+
+
+class RunStatus(BaseModel):
+    """Status of a scan run (for polling).
+
+    Use this to check job progress and completion.
+    """
+    run_id: str
+    status: str  # queued, running, completed, failed
+    progress: int  # 0-100
+    created_at: Optional[str]
+    started_at: Optional[str]
+    completed_at: Optional[str]
+    error_message: Optional[str]
+    # Results (available after completion)
+    nb_insights: Optional[int]
+    nb_clusters: Optional[int]
+    # Configuration
+    mode: Optional[str]
+    run_mode: Optional[str]
+    max_insights: Optional[int]
 
 
 class RunSummary(BaseModel):
-    """Summary of a scan run."""
+    """Summary of a scan run for list views."""
     id: str
     created_at: str
+    status: str
+    progress: int
     config_name: Optional[str]
-    mode: str
-    nb_insights: int
-    nb_clusters: int
-    total_cost_usd: float
+    mode: Optional[str]
+    run_mode: Optional[str]
+    nb_insights: Optional[int]
+    nb_clusters: Optional[int]
+    total_cost_usd: Optional[float]
 
 
 class InsightSummary(BaseModel):
@@ -238,21 +289,51 @@ async def health_check():
     }
 
 
+@app.get("/queue/status", tags=["General"])
+async def queue_status():
+    """
+    Get the current status of the job queue.
+
+    Useful for monitoring queue depth and worker activity.
+
+    **Example response:**
+    ```json
+    {
+        "queued_jobs": 3,
+        "running_jobs": 1,
+        "timestamp": "2025-12-05T14:30:22"
+    }
+    ```
+    """
+    try:
+        queued = count_queued_jobs()
+        running = count_running_jobs()
+
+        return {
+            "queued_jobs": queued,
+            "running_jobs": running,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching queue status: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 # ============================================================================
 # Runs Management
 # ============================================================================
 
 @app.post("/runs", response_model=ScanResponse, tags=["Runs"])
-async def create_run(
-    request: ScanRequest,
-    background_tasks: BackgroundTasks
-):
+async def create_run(request: ScanRequest):
     """
-    Launch a new scan run.
+    Create a new scan job (enqueue only).
 
-    This endpoint starts a new scan in the background and returns immediately
-    with the run_id. The scan will process posts, generate insights, and save
-    results to the database.
+    This endpoint creates a scan job in the queue and returns immediately.
+    The actual scan will be processed asynchronously by a worker process.
+
+    **Important:** This endpoint does NOT run the scan synchronously.
+    Poll `GET /runs/{run_id}` to check job status and progress.
 
     **Mode options:**
     - `light`: Use lightweight model for all insights (faster, cheaper)
@@ -262,7 +343,7 @@ async def create_run(
     - `discover`: Filter out duplicates and non-SaaS insights (default)
     - `track`: Show all insights including duplicates
 
-    **Example:**
+    **Example request:**
     ```json
     {
         "mode": "deep",
@@ -270,9 +351,22 @@ async def create_run(
         "run_mode": "discover"
     }
     ```
+
+    **Example response:**
+    ```json
+    {
+        "run_id": "20251205_143022",
+        "status": "queued",
+        "created_at": "2025-12-05T14:30:22",
+        "mode": "deep",
+        "run_mode": "discover",
+        "max_insights": 20,
+        "message": "Job queued successfully. Poll GET /runs/{run_id} for status."
+    }
+    ```
     """
     try:
-        logger.info(f"Creating new scan run: mode={request.mode}, run_mode={request.run_mode}, max_insights={request.max_insights}")
+        logger.info(f"Enqueuing new scan job: mode={request.mode}, run_mode={request.run_mode}, max_insights={request.max_insights}")
 
         # Validate mode
         if request.mode not in ["light", "deep"]:
@@ -288,30 +382,36 @@ async def create_run(
                 detail=f"Invalid run_mode '{request.run_mode}'. Must be 'discover' or 'track'."
             )
 
-        # Run scan synchronously (for now - could be made async with background tasks)
-        run_id = core_run_scan(
-            config_name=request.config_name,
+        # Generate run ID
+        run_id = generate_run_id()
+
+        # Enqueue the job (does NOT run the scan)
+        run_data = enqueue_run(
+            run_id=run_id,
             mode=request.mode,
+            run_mode=request.run_mode,
             max_insights=request.max_insights,
             input_pattern=request.input_pattern,
-            save_to_db=True,
-            run_mode=request.run_mode
+            config_name=request.config_name,
         )
+
+        logger.info(f"Scan job enqueued: run_id={run_id}")
 
         return ScanResponse(
             run_id=run_id,
-            status="completed",
-            message=f"Scan completed successfully. Run ID: {run_id}"
+            status="queued",
+            created_at=run_data["created_at"],
+            mode=request.mode,
+            run_mode=request.run_mode,
+            max_insights=request.max_insights,
+            message=f"Job queued successfully. Poll GET /runs/{run_id} for status."
         )
 
-    except FileNotFoundError as e:
-        logger.error(f"File not found: {e}")
-        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         logger.error(f"Validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error creating scan run: {e}")
+        logger.error(f"Error enqueuing scan job: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -323,6 +423,7 @@ async def get_runs(
     List recent scan runs.
 
     Returns a list of runs ordered by creation date (most recent first).
+    Includes job status information for monitoring.
 
     **Query Parameters:**
     - `limit`: Maximum number of runs to return (1-100, default: 10)
@@ -334,10 +435,13 @@ async def get_runs(
             RunSummary(
                 id=run["id"],
                 created_at=run["created_at"],
+                status=run.get("status", "completed"),  # Default for legacy runs
+                progress=run.get("progress", 100),  # Default for legacy runs
                 config_name=run.get("config_name"),
-                mode=run["mode"],
-                nb_insights=run["nb_insights"],
-                nb_clusters=run["nb_clusters"],
+                mode=run.get("mode"),
+                run_mode=run.get("run_mode"),
+                nb_insights=run.get("nb_insights"),
+                nb_clusters=run.get("nb_clusters"),
                 total_cost_usd=run.get("total_cost_usd", 0.0)
             )
             for run in runs
@@ -345,6 +449,84 @@ async def get_runs(
 
     except Exception as e:
         logger.error(f"Error fetching runs: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/runs/{run_id}", response_model=RunStatus, tags=["Runs"])
+async def get_run_status(run_id: str):
+    """
+    Get the status of a specific scan run.
+
+    Use this endpoint to poll for job progress and completion.
+    Call this periodically (e.g., every 2-5 seconds) to track job status.
+
+    **Status values:**
+    - `queued`: Job is waiting to be processed
+    - `running`: Job is being processed by a worker
+    - `completed`: Job finished successfully
+    - `failed`: Job failed with an error
+
+    **Example response (running):**
+    ```json
+    {
+        "run_id": "20251205_143022",
+        "status": "running",
+        "progress": 40,
+        "created_at": "2025-12-05T14:30:22",
+        "started_at": "2025-12-05T14:30:25",
+        "completed_at": null,
+        "error_message": null,
+        "nb_insights": null,
+        "nb_clusters": null,
+        "mode": "deep",
+        "run_mode": "discover",
+        "max_insights": 20
+    }
+    ```
+
+    **Example response (completed):**
+    ```json
+    {
+        "run_id": "20251205_143022",
+        "status": "completed",
+        "progress": 100,
+        "created_at": "2025-12-05T14:30:22",
+        "started_at": "2025-12-05T14:30:25",
+        "completed_at": "2025-12-05T14:32:10",
+        "error_message": null,
+        "nb_insights": 18,
+        "nb_clusters": 25,
+        "mode": "deep",
+        "run_mode": "discover",
+        "max_insights": 20
+    }
+    ```
+    """
+    try:
+        status = get_job_status(run_id)
+
+        if not status:
+            raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+
+        return RunStatus(
+            run_id=status["run_id"],
+            status=status["status"],
+            progress=status.get("progress", 0),
+            created_at=status.get("created_at"),
+            started_at=status.get("started_at"),
+            completed_at=status.get("completed_at"),
+            error_message=status.get("error_message"),
+            nb_insights=status.get("nb_insights"),
+            nb_clusters=status.get("nb_clusters"),
+            mode=status.get("mode"),
+            run_mode=status.get("run_mode"),
+            max_insights=status.get("max_insights"),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching run status for {run_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

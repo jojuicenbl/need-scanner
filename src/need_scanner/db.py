@@ -31,6 +31,13 @@ from .database import (
     InsightExploration,
 )
 from .database.config import DatabaseConfigError
+from .database.models import (
+    JOB_STATUS_QUEUED,
+    JOB_STATUS_RUNNING,
+    JOB_STATUS_COMPLETED,
+    JOB_STATUS_FAILED,
+    VALID_JOB_STATUSES,
+)
 from .schemas import EnrichedInsight
 
 
@@ -450,6 +457,272 @@ def get_explorations_for_insight(
 
 
 # ============================================================================
+# Job Queue Operations (Step 2)
+# ============================================================================
+
+def enqueue_run(
+    run_id: str,
+    mode: str = "deep",
+    run_mode: str = "discover",
+    max_insights: Optional[int] = None,
+    input_pattern: str = "data/raw/posts_*.json",
+    config_name: Optional[str] = None,
+) -> Dict:
+    """
+    Create a new run in 'queued' status.
+
+    This is the entry point for the job queue. The HTTP API calls this
+    to enqueue a scan job, which will be picked up by a worker process.
+
+    Args:
+        run_id: Unique run identifier
+        mode: Scan mode ('light' or 'deep')
+        run_mode: Run mode ('discover' or 'track')
+        max_insights: Maximum number of insights to generate
+        input_pattern: Glob pattern for input files
+        config_name: Optional configuration name
+
+    Returns:
+        Dictionary with the created run details
+    """
+    with get_db_session() as db:
+        run = Run(
+            id=run_id,
+            created_at=datetime.now(),
+            status=JOB_STATUS_QUEUED,
+            progress=0,
+            mode=mode,
+            run_mode=run_mode,
+            max_insights=max_insights,
+            input_pattern=input_pattern,
+            config_name=config_name,
+        )
+        db.add(run)
+        db.flush()  # Ensure the run is written
+
+        result = _run_to_dict(run)
+
+    logger.info(f"Enqueued run {run_id} with status=queued")
+    return result
+
+
+def get_run_by_id(run_id: str) -> Optional[Dict]:
+    """
+    Get a run by its ID.
+
+    Args:
+        run_id: Run identifier
+
+    Returns:
+        Run dictionary or None if not found
+    """
+    with get_db_session() as db:
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if run:
+            return _run_to_dict(run)
+        return None
+
+
+def claim_next_job(worker_id: Optional[str] = None) -> Optional[Dict]:
+    """
+    Claim the next queued job for processing.
+
+    Uses SELECT ... FOR UPDATE SKIP LOCKED to safely claim a job
+    in a concurrent environment. Multiple workers can call this
+    safely without race conditions.
+
+    Args:
+        worker_id: Optional worker identifier for logging
+
+    Returns:
+        Run dictionary if a job was claimed, None if no jobs available
+    """
+    from sqlalchemy import text
+
+    with get_db_session() as db:
+        # Use raw SQL for the FOR UPDATE SKIP LOCKED clause
+        # This is PostgreSQL-specific but that's what we're using
+        result = db.execute(
+            text("""
+                SELECT id FROM runs
+                WHERE status = :status
+                ORDER BY created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            """),
+            {"status": JOB_STATUS_QUEUED}
+        )
+        row = result.fetchone()
+
+        if not row:
+            return None
+
+        run_id = row[0]
+
+        # Update the run to 'running' status
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if run:
+            run.status = JOB_STATUS_RUNNING
+            run.started_at = datetime.now()
+            run.progress = 0
+            db.flush()
+
+            worker_info = f" by worker {worker_id}" if worker_id else ""
+            logger.info(f"Claimed job {run_id}{worker_info}")
+
+            return _run_to_dict(run)
+
+        return None
+
+
+def update_job_progress(run_id: str, progress: int) -> None:
+    """
+    Update the progress of a running job.
+
+    Args:
+        run_id: Run identifier
+        progress: Progress percentage (0-100)
+    """
+    progress = max(0, min(100, progress))  # Clamp to 0-100
+
+    with get_db_session() as db:
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if run and run.status == JOB_STATUS_RUNNING:
+            run.progress = progress
+            logger.debug(f"Updated job {run_id} progress to {progress}%")
+
+
+def complete_job(
+    run_id: str,
+    nb_insights: int,
+    nb_clusters: int,
+    total_cost_usd: float = 0.0,
+    embed_cost_usd: float = 0.0,
+    summary_cost_usd: float = 0.0,
+    csv_path: Optional[str] = None,
+    json_path: Optional[str] = None,
+    notes: Optional[str] = None,
+    run_stats: Optional[Dict] = None,
+) -> None:
+    """
+    Mark a job as completed and store results.
+
+    Args:
+        run_id: Run identifier
+        nb_insights: Number of insights generated
+        nb_clusters: Number of clusters created
+        total_cost_usd: Total API cost
+        embed_cost_usd: Embedding cost
+        summary_cost_usd: Summarization cost
+        csv_path: Path to generated CSV
+        json_path: Path to generated JSON
+        notes: Optional notes
+        run_stats: Instrumentation stats (optional)
+    """
+    run_stats_json = json.dumps(run_stats) if run_stats else None
+
+    with get_db_session() as db:
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if run:
+            run.status = JOB_STATUS_COMPLETED
+            run.completed_at = datetime.now()
+            run.progress = 100
+            run.nb_insights = nb_insights
+            run.nb_clusters = nb_clusters
+            run.total_cost_usd = total_cost_usd
+            run.embed_cost_usd = embed_cost_usd
+            run.summary_cost_usd = summary_cost_usd
+            run.csv_path = csv_path
+            run.json_path = json_path
+            run.notes = notes
+            run.run_stats = run_stats_json
+
+            logger.info(f"Completed job {run_id} with {nb_insights} insights")
+
+
+def fail_job(run_id: str, error_message: str) -> None:
+    """
+    Mark a job as failed with an error message.
+
+    Args:
+        run_id: Run identifier
+        error_message: Error description (will be truncated to 2000 chars)
+    """
+    # Truncate error message to avoid DB issues
+    if len(error_message) > 2000:
+        error_message = error_message[:1997] + "..."
+
+    with get_db_session() as db:
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if run:
+            run.status = JOB_STATUS_FAILED
+            run.completed_at = datetime.now()
+            run.error_message = error_message
+
+            logger.error(f"Failed job {run_id}: {error_message[:100]}...")
+
+
+def get_job_status(run_id: str) -> Optional[Dict]:
+    """
+    Get the current status of a job.
+
+    Returns a subset of fields useful for polling:
+    - status, progress, timestamps, error_message
+    - nb_insights (if completed)
+
+    Args:
+        run_id: Run identifier
+
+    Returns:
+        Status dictionary or None if not found
+    """
+    with get_db_session() as db:
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if run:
+            return {
+                "run_id": run.id,
+                "status": run.status,
+                "progress": run.progress,
+                "created_at": run.created_at.isoformat() if run.created_at else None,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                "error_message": run.error_message,
+                "nb_insights": run.nb_insights,
+                "nb_clusters": run.nb_clusters,
+                "mode": run.mode,
+                "run_mode": run.run_mode,
+                "max_insights": run.max_insights,
+            }
+        return None
+
+
+def count_queued_jobs() -> int:
+    """
+    Count the number of jobs in 'queued' status.
+
+    Useful for monitoring queue depth.
+
+    Returns:
+        Number of queued jobs
+    """
+    with get_db_session() as db:
+        return db.query(Run).filter(Run.status == JOB_STATUS_QUEUED).count()
+
+
+def count_running_jobs() -> int:
+    """
+    Count the number of jobs in 'running' status.
+
+    Useful for monitoring active workers.
+
+    Returns:
+        Number of running jobs
+    """
+    with get_db_session() as db:
+        return db.query(Run).filter(Run.status == JOB_STATUS_RUNNING).count()
+
+
+# ============================================================================
 # Helper functions to convert ORM objects to dictionaries
 # ============================================================================
 
@@ -458,8 +731,19 @@ def _run_to_dict(run: Run) -> Dict:
     return {
         "id": run.id,
         "created_at": run.created_at.isoformat() if run.created_at else None,
+        # Job queue fields
+        "status": run.status,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "progress": run.progress,
+        "error_message": run.error_message,
+        # Configuration
         "config_name": run.config_name,
         "mode": run.mode,
+        "run_mode": run.run_mode,
+        "max_insights": run.max_insights,
+        "input_pattern": run.input_pattern,
+        # Results
         "nb_insights": run.nb_insights,
         "nb_clusters": run.nb_clusters,
         "total_cost_usd": run.total_cost_usd,

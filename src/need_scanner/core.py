@@ -421,6 +421,264 @@ def run_scan(
     return run_id
 
 
+def run_scan_for_worker(
+    run_id: str,
+    mode: str = "deep",
+    run_mode: str = "discover",
+    max_insights: Optional[int] = None,
+    input_pattern: str = "data/raw/posts_*.json",
+    config_name: Optional[str] = None,
+    progress_callback: Optional[callable] = None,
+    auto_fetch: bool = True,
+    max_data_age_days: int = 1,
+    fetch_pack: str = "multi_sector",
+    fetch_limit_per_sub: int = 30,
+) -> Dict:
+    """
+    Run the scan pipeline for a worker process.
+
+    This is similar to run_scan() but designed for the job queue worker:
+    - Uses a pre-assigned run_id (from the job queue)
+    - Returns results as a dictionary (caller saves to DB)
+    - Accepts a progress_callback for real-time progress updates
+    - Does NOT save run metadata to DB (worker handles that)
+
+    Args:
+        run_id: Pre-assigned run identifier from job queue
+        mode: "light" or "deep" - controls LLM enrichment level
+        run_mode: "discover" (filter duplicates/non-SaaS) or "track" (show all)
+        max_insights: Optional limit on number of insights
+        input_pattern: Glob pattern for input JSON files
+        config_name: Optional configuration name
+        progress_callback: Optional callback(progress: int, message: str)
+        auto_fetch: Automatically fetch fresh data if stale
+        max_data_age_days: Max age of data before refetch
+        fetch_pack: Subreddit pack to use for fetch
+        fetch_limit_per_sub: Posts per subreddit when fetching
+
+    Returns:
+        Dictionary with results:
+        - nb_insights: int
+        - nb_clusters: int
+        - total_cost_usd: float
+        - embed_cost_usd: float
+        - summary_cost_usd: float
+        - csv_path: str
+        - json_path: str
+        - notes: str
+        - run_stats: dict (optional)
+        - insights: List[EnrichedInsight]
+
+    Raises:
+        FileNotFoundError: If no input files match the pattern
+        ValueError: If invalid mode specified
+    """
+    # Validate mode
+    if mode not in ["light", "deep"]:
+        raise ValueError(f"Invalid mode '{mode}'. Must be 'light' or 'deep'.")
+
+    # Load configuration
+    config = get_config()
+
+    # Setup output directory
+    output_dir = Path("data/results_v2")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def update_progress(pct: int, msg: str = ""):
+        if progress_callback:
+            progress_callback(pct, msg)
+
+    logger.info("=" * 60)
+    logger.info(f"Need Scanner Worker - Run ID: {run_id}")
+    logger.info(f"   Mode: {mode}")
+    logger.info(f"   Run Mode: {run_mode}")
+    logger.info(f"   Config: {config_name or 'default'}")
+    logger.info("=" * 60)
+
+    update_progress(0, "Starting scan")
+
+    # ========================================================================
+    # STEP 0: Check data freshness and auto-fetch if needed (0-10%)
+    # ========================================================================
+    if auto_fetch:
+        is_fresh, oldest_date = _check_data_freshness(input_pattern, max_data_age_days)
+
+        if not is_fresh:
+            update_progress(2, "Fetching fresh data")
+            logger.info("[0/7] Fetching fresh data...")
+
+            raw_dir = Path(input_pattern).parent
+            if "*" in str(raw_dir):
+                raw_dir = Path("data/raw")
+
+            num_fetched = _fetch_fresh_data(
+                pack_name=fetch_pack,
+                output_dir=raw_dir,
+                limit_per_sub=fetch_limit_per_sub,
+                clear_old=True
+            )
+
+            if num_fetched == 0:
+                raise ValueError("Failed to fetch any posts. Check network connection.")
+
+            logger.info(f"       Fetched {num_fetched} fresh posts")
+        else:
+            logger.info(f"[0/7] Data is fresh (oldest: {oldest_date.strftime('%Y-%m-%d %H:%M')})")
+
+    update_progress(10, "Loading posts")
+
+    # ========================================================================
+    # STEP 1: Load posts (10-15%)
+    # ========================================================================
+    logger.info("[1/7] Loading posts...")
+
+    posts_files = glob.glob(input_pattern)
+    if not posts_files:
+        if auto_fetch:
+            raise FileNotFoundError(f"No files found after fetch. Pattern: {input_pattern}")
+        else:
+            raise FileNotFoundError(f"No files found matching pattern: {input_pattern}")
+
+    all_posts = []
+    for file_path in posts_files:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            posts_data = json.load(f)
+            all_posts.extend([Post(**p) for p in posts_data])
+
+    logger.info(f"Loaded {len(all_posts)} posts from {len(posts_files)} files")
+
+    if len(all_posts) == 0:
+        raise ValueError("No posts loaded. Cannot proceed with empty dataset.")
+
+    update_progress(15, "Generating embeddings")
+
+    # ========================================================================
+    # STEP 2: Generate embeddings (15-30%)
+    # ========================================================================
+    logger.info("[2/7] Generating embeddings...")
+
+    embeddings, metadata, embed_cost = embed_posts(
+        posts=all_posts,
+        model=config.ns_embed_model,
+        api_key=config.openai_api_key,
+        output_dir=output_dir
+    )
+
+    logger.info(f"Generated embeddings. Cost: ${embed_cost:.4f}")
+
+    update_progress(30, "Clustering")
+
+    # ========================================================================
+    # STEP 3: Clustering (30-40%)
+    # ========================================================================
+    logger.info("[3/7] Clustering...")
+
+    n_clusters = min(config.ns_num_clusters, len(all_posts))
+    labels, _ = cluster(embeddings, n_clusters=n_clusters)
+
+    cluster_data = get_cluster_data(labels, metadata, embeddings)
+
+    logger.info(f"Created {len(cluster_data)} clusters")
+
+    update_progress(40, "Running enriched pipeline")
+
+    # ========================================================================
+    # STEP 4: Run enriched pipeline (40-80%)
+    # ========================================================================
+    logger.info(f"[4/7] Running enriched pipeline ({mode} mode)...")
+
+    original_top_k = config.ns_top_k_enrichment
+    original_heavy_model = config.ns_heavy_model
+
+    if mode == "light":
+        config.ns_top_k_enrichment = 0
+        logger.info("   Using light model (gpt-4o-mini) for all insights")
+    else:
+        logger.info(f"   Using heavy model ({config.ns_heavy_model}) for TOP {config.ns_top_k_enrichment} insights")
+
+    try:
+        results = run_enriched_pipeline(
+            cluster_data=cluster_data,
+            embeddings=embeddings,
+            labels=labels,
+            output_dir=output_dir,
+            use_mmr=True,
+            use_history_penalty=True,
+            run_mode=run_mode
+        )
+    finally:
+        config.ns_top_k_enrichment = original_top_k
+        config.ns_heavy_model = original_heavy_model
+
+    insights: List[EnrichedInsight] = results['insights']
+    all_insights: List[EnrichedInsight] = results.get('all_insights', insights)
+    total_cost = results['total_cost']
+    summary_cost = results.get('summary_cost', 0.0)
+    run_stats = results.get('run_stats')
+
+    if max_insights and len(insights) > max_insights:
+        logger.info(f"Limiting insights to top {max_insights} (from {len(insights)})")
+        insights = insights[:max_insights]
+
+    logger.info(f"Generated {len(insights)} filtered insights ({len(all_insights)} total)")
+
+    update_progress(80, "Exporting results")
+
+    # ========================================================================
+    # STEP 5: Export results (80-95%)
+    # ========================================================================
+    logger.info("[5/7] Exporting results...")
+
+    csv_path = output_dir / f"insights_{run_id}.csv"
+    export_insights_to_csv(insights, csv_path)
+    logger.info(f"   CSV: {csv_path}")
+
+    json_path = output_dir / f"results_{run_id}.json"
+    stats_dict = {
+        'run_id': run_id,
+        'mode': mode,
+        'config_name': config_name,
+        'num_posts': len(all_posts),
+        'num_clusters': len(cluster_data),
+        'num_insights': len(insights),
+        'embed_cost_usd': embed_cost,
+        'summary_cost_usd': summary_cost,
+        'total_cost_usd': total_cost
+    }
+    write_enriched_cluster_results(json_path, insights, stats_dict)
+    logger.info(f"   JSON: {json_path}")
+
+    update_progress(95, "Finalizing")
+
+    # ========================================================================
+    # Summary
+    # ========================================================================
+    logger.info("=" * 60)
+    logger.info("Scan complete!")
+    logger.info("=" * 60)
+    logger.info(f"   Run ID: {run_id}")
+    logger.info(f"   Insights: {len(all_insights)}")
+    logger.info(f"   Clusters: {len(cluster_data)}")
+    logger.info(f"   Total cost: ${total_cost:.4f}")
+    logger.info("=" * 60)
+
+    update_progress(100, "Complete")
+
+    # Return results for the worker to save
+    return {
+        "nb_insights": len(all_insights),
+        "nb_clusters": len(cluster_data),
+        "total_cost_usd": total_cost,
+        "embed_cost_usd": embed_cost,
+        "summary_cost_usd": summary_cost,
+        "csv_path": str(csv_path),
+        "json_path": str(json_path),
+        "notes": f"Input: {input_pattern} | Mode: {run_mode} | Filtered: {len(insights)}",
+        "run_stats": run_stats,
+        "insights": all_insights,  # All insights (including filtered)
+    }
+
+
 def list_recent_runs(limit: int = 10, db_path: Optional[Path] = None) -> List[Dict]:
     """
     List recent scan runs from database.
