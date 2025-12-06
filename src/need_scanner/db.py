@@ -532,11 +532,15 @@ def get_run_by_id(run_id: str) -> Optional[Dict]:
 
 def claim_next_job(worker_id: Optional[str] = None) -> Optional[Dict]:
     """
-    Claim the next queued job for processing.
+    Claim the next queued canonical job for processing.
 
     Uses SELECT ... FOR UPDATE SKIP LOCKED to safely claim a job
     in a concurrent environment. Multiple workers can call this
     safely without race conditions.
+
+    Step 4: Only picks canonical runs (is_cached_result = false).
+    Cached runs are never processed by workers - they reuse results
+    from their source (canonical) run.
 
     Args:
         worker_id: Optional worker identifier for logging
@@ -549,10 +553,12 @@ def claim_next_job(worker_id: Optional[str] = None) -> Optional[Dict]:
     with get_db_session() as db:
         # Use raw SQL for the FOR UPDATE SKIP LOCKED clause
         # This is PostgreSQL-specific but that's what we're using
+        # Step 4: Only pick canonical runs (is_cached_result = false)
         result = db.execute(
             text("""
                 SELECT id FROM runs
                 WHERE status = :status
+                  AND is_cached_result = false
                 ORDER BY created_at ASC
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
@@ -575,7 +581,7 @@ def claim_next_job(worker_id: Optional[str] = None) -> Optional[Dict]:
             db.flush()
 
             worker_info = f" by worker {worker_id}" if worker_id else ""
-            logger.info(f"Claimed job {run_id}{worker_info}")
+            logger.info(f"Claimed canonical job {run_id}{worker_info}")
 
             return _run_to_dict(run)
 
@@ -677,6 +683,9 @@ def get_job_status(run_id: str) -> Optional[Dict]:
     - status, progress, timestamps, error_message
     - nb_insights (if completed)
 
+    Step 4: For cached runs, syncs status from the source (canonical) run.
+    This ensures cached runs reflect the real-time status of the computation.
+
     Args:
         run_id: Run identifier
 
@@ -686,34 +695,66 @@ def get_job_status(run_id: str) -> Optional[Dict]:
     with get_db_session() as db:
         run = db.query(Run).filter(Run.id == run_id).first()
         if run:
+            # Step 4: For cached runs, get status from source run
+            status = run.status
+            progress = run.progress
+            started_at = run.started_at
+            completed_at = run.completed_at
+            error_message = run.error_message
+            nb_insights = run.nb_insights
+            nb_clusters = run.nb_clusters
+
+            if run.is_cached_result and run.source_run_id:
+                # Sync status from the canonical (source) run
+                source_run = db.query(Run).filter(Run.id == run.source_run_id).first()
+                if source_run:
+                    status = source_run.status
+                    progress = source_run.progress
+                    started_at = source_run.started_at
+                    completed_at = source_run.completed_at
+                    error_message = source_run.error_message
+                    nb_insights = source_run.nb_insights
+                    nb_clusters = source_run.nb_clusters
+
             return {
                 "run_id": run.id,
-                "status": run.status,
-                "progress": run.progress,
+                "status": status,
+                "progress": progress,
                 "created_at": run.created_at.isoformat() if run.created_at else None,
-                "started_at": run.started_at.isoformat() if run.started_at else None,
-                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-                "error_message": run.error_message,
-                "nb_insights": run.nb_insights,
-                "nb_clusters": run.nb_clusters,
+                "started_at": started_at.isoformat() if started_at else None,
+                "completed_at": completed_at.isoformat() if completed_at else None,
+                "error_message": error_message,
+                "nb_insights": nb_insights,
+                "nb_clusters": nb_clusters,
                 "mode": run.mode,
                 "run_mode": run.run_mode,
                 "max_insights": run.max_insights,
+                # Step 4: Include caching info
+                "is_cached_result": run.is_cached_result,
+                "source_run_id": run.source_run_id,
             }
         return None
 
 
 def count_queued_jobs() -> int:
     """
-    Count the number of jobs in 'queued' status.
+    Count the number of canonical jobs in 'queued' status.
+
+    Step 4: Only counts canonical runs (is_cached_result = false).
+    Cached runs are not processed by workers.
 
     Useful for monitoring queue depth.
 
     Returns:
-        Number of queued jobs
+        Number of queued canonical jobs
     """
     with get_db_session() as db:
-        return db.query(Run).filter(Run.status == JOB_STATUS_QUEUED).count()
+        return (
+            db.query(Run)
+            .filter(Run.status == JOB_STATUS_QUEUED)
+            .filter(Run.is_cached_result == False)  # noqa: E712
+            .count()
+        )
 
 
 def count_running_jobs() -> int:
@@ -746,6 +787,10 @@ def _run_to_dict(run: Run) -> Dict:
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "progress": run.progress,
         "error_message": run.error_message,
+        # Caching fields (Step 4)
+        "cache_key": run.cache_key,
+        "is_cached_result": run.is_cached_result,
+        "source_run_id": run.source_run_id,
         # Configuration
         "config_name": run.config_name,
         "mode": run.mode,

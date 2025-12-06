@@ -123,6 +123,11 @@ class Run(Base):
     - running: Worker is processing the scan
     - completed: Scan finished successfully
     - failed: Scan failed with an error
+
+    Caching (Step 4):
+    - Canonical runs (is_cached_result=false): Actually computed by worker
+    - Cached runs (is_cached_result=true): Reuse another run's results via source_run_id
+    - cache_key: Deterministic key for (scan_config + date) to find matching runs
     """
 
     __tablename__ = "runs"
@@ -150,6 +155,23 @@ class Run(Base):
 
     # Error details if status == 'failed'
     error_message = Column(Text, nullable=True)
+
+    # =========================================================================
+    # Caching Fields (Step 4)
+    # =========================================================================
+
+    # Deterministic key representing scan configuration + date
+    # Format: SHA256 hash of JSON {mode, run_mode, max_insights, date, ...}
+    cache_key = Column(Text, nullable=True)
+
+    # Whether this run reuses another run's results
+    # false = canonical run (actually computed by worker)
+    # true = per-user run that reuses results from source_run_id
+    is_cached_result = Column(Boolean, nullable=False, default=False)
+
+    # For cached runs: points to the canonical run whose results are reused
+    # For canonical runs: NULL
+    source_run_id = Column(String(50), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True)
 
     # =========================================================================
     # Run Configuration (job parameters)
@@ -188,15 +210,22 @@ class Run(Base):
     insights = relationship("Insight", back_populates="run", cascade="all, delete-orphan")
     user = relationship("User", back_populates="runs")
 
+    # Self-referential relationship for caching
+    # source_run: the canonical run this cached run points to
+    source_run = relationship("Run", remote_side="Run.id", foreign_keys=[source_run_id])
+
     __table_args__ = (
         Index("idx_runs_created_at", created_at.desc()),
         Index("idx_runs_status", "status"),
         Index("idx_runs_status_created_at", "status", "created_at"),
         Index("idx_runs_user_id", "user_id"),
+        # Caching indexes (Step 4)
+        Index("idx_runs_cache_key_canonical", "cache_key", "is_cached_result", "created_at"),
+        Index("idx_runs_source_run_id", "source_run_id"),
     )
 
     def __repr__(self):
-        return f"<Run(id={self.id}, user_id={self.user_id}, status={self.status}, mode={self.mode}, progress={self.progress})>"
+        return f"<Run(id={self.id}, user_id={self.user_id}, status={self.status}, mode={self.mode}, progress={self.progress}, is_cached={self.is_cached_result})>"
 
 
 class Insight(Base):
