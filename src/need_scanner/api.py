@@ -6,6 +6,12 @@ Step 2 Architecture: Scan Job Queue
 - GET /runs/{run_id}: Poll for job status and progress
 - Worker process picks up jobs and runs scans asynchronously
 
+Step 3 Architecture: Freemium Limits
+====================================
+- All scan/explore endpoints require authentication
+- Free users: 1 scan/day, 3 explorations/month, 10 insights/run
+- Premium users: unlimited
+
 The HTTP API no longer runs scans synchronously. All scan work
 is done by the worker process (see need_scanner.worker).
 """
@@ -15,9 +21,10 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 from loguru import logger
 
 from .db import (
@@ -34,6 +41,16 @@ from .db import (
     get_job_status,
     count_queued_jobs,
     count_running_jobs,
+)
+from .database import get_session, User
+from .auth import get_current_user, get_optional_user
+from .limits import (
+    ensure_can_run_scan,
+    ensure_can_explore_insight,
+    get_insight_limit_for_user,
+    ensure_can_export,
+    get_user_usage_stats,
+    FREE_INSIGHTS_PER_RUN,
 )
 from .llm import explore_insight_with_llm
 from .config import get_config
@@ -237,6 +254,29 @@ class ExplorationSummary(BaseModel):
     preview: str  # First 200 chars of exploration_text
 
 
+class InsightsResponse(BaseModel):
+    """Response model for insights with freemium limit metadata.
+
+    For free users, only up to 10 insights are returned.
+    has_more indicates there are additional insights available with premium.
+    """
+    items: List[InsightSummary]
+    total_count: int  # Total insights in the run (before limit)
+    returned_count: int  # Number of insights returned
+    has_more: bool  # True if there are more insights than returned
+    limit_applied: Optional[int]  # The limit that was applied (None for premium)
+
+
+class UsageStatsResponse(BaseModel):
+    """Response model for user usage statistics."""
+    plan: str
+    is_premium: bool
+    scans: dict
+    explorations: dict
+    insights_per_run: Optional[int]
+    can_export: bool
+
+
 # ============================================================================
 # Startup
 # ============================================================================
@@ -325,15 +365,25 @@ async def queue_status():
 # ============================================================================
 
 @app.post("/runs", response_model=ScanResponse, tags=["Runs"])
-async def create_run(request: ScanRequest):
+async def create_run(
+    request: ScanRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
     """
     Create a new scan job (enqueue only).
+
+    **Requires authentication.** Free users are limited to 1 scan per day.
 
     This endpoint creates a scan job in the queue and returns immediately.
     The actual scan will be processed asynchronously by a worker process.
 
     **Important:** This endpoint does NOT run the scan synchronously.
     Poll `GET /runs/{run_id}` to check job status and progress.
+
+    **Freemium limits:**
+    - Free users: 1 scan per day
+    - Premium users: unlimited scans
 
     **Mode options:**
     - `light`: Use lightweight model for all insights (faster, cheaper)
@@ -366,7 +416,10 @@ async def create_run(request: ScanRequest):
     ```
     """
     try:
-        logger.info(f"Enqueuing new scan job: mode={request.mode}, run_mode={request.run_mode}, max_insights={request.max_insights}")
+        logger.info(f"User {current_user.id} requesting scan: mode={request.mode}, run_mode={request.run_mode}")
+
+        # Step 3: Check freemium limits
+        ensure_can_run_scan(current_user, db)
 
         # Validate mode
         if request.mode not in ["light", "deep"]:
@@ -393,9 +446,10 @@ async def create_run(request: ScanRequest):
             max_insights=request.max_insights,
             input_pattern=request.input_pattern,
             config_name=request.config_name,
+            user_id=current_user.id,
         )
 
-        logger.info(f"Scan job enqueued: run_id={run_id}")
+        logger.info(f"Scan job enqueued: run_id={run_id} for user {current_user.id}")
 
         return ScanResponse(
             run_id=run_id,
@@ -407,6 +461,8 @@ async def create_run(request: ScanRequest):
             message=f"Job queued successfully. Poll GET /runs/{run_id} for status."
         )
 
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"Validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -530,7 +586,7 @@ async def get_run_status(run_id: str):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@app.get("/runs/{run_id}/insights", response_model=List[InsightSummary], tags=["Runs"])
+@app.get("/runs/{run_id}/insights", response_model=InsightsResponse, tags=["Runs"])
 async def get_run_insights_endpoint(
     run_id: str,
     limit: Optional[int] = Query(None, description="Maximum number of insights to return", ge=1),
@@ -538,12 +594,21 @@ async def get_run_insights_endpoint(
     min_priority: Optional[float] = Query(None, description="Minimum priority score", ge=0, le=10),
     saas_viable_only: bool = Query(False, description="Only return SaaS-viable insights"),
     include_duplicates: bool = Query(False, description="Include historical duplicates"),
-    solution_type: Optional[str] = Query(None, description="Filter by solution type (saas_b2b, saas_b2c, tooling_dev, etc.)")
+    solution_type: Optional[str] = Query(None, description="Filter by solution type (saas_b2b, saas_b2c, tooling_dev, etc.)"),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get insights for a specific run.
 
-    Returns all insights for the given run_id, optionally filtered.
+    **Requires authentication.**
+
+    **Freemium limits:**
+    - Free users: Maximum 10 insights visible per run
+    - Premium users: All insights visible
+
+    Returns insights for the given run_id, optionally filtered.
+    The response includes metadata about whether there are more insights
+    available (for free users who hit the limit).
 
     **Query Parameters:**
     - `limit`: Maximum number of insights to return
@@ -551,7 +616,7 @@ async def get_run_insights_endpoint(
     - `min_priority`: Minimum priority score (0-10)
     - `saas_viable_only`: Only return SaaS-viable insights (default: false)
     - `include_duplicates`: Include historical duplicates (default: false)
-    - `solution_type`: Filter by solution type (saas_b2b, saas_b2c, tooling_dev, api_product, service_only, content_only, hardware_required, regulation_policy, impractical_unclear)
+    - `solution_type`: Filter by solution type
     """
     try:
         insights = get_run_insights(run_id=run_id, limit=None)  # Get all, filter later
@@ -581,11 +646,30 @@ async def get_run_insights_endpoint(
         if solution_type:
             filtered_insights = [i for i in filtered_insights if i.get("solution_type") == solution_type]
 
-        # Apply limit after filtering
-        if limit:
-            filtered_insights = filtered_insights[:limit]
+        # Track total count before freemium limit
+        total_count = len(filtered_insights)
 
-        return [
+        # Step 3: Apply freemium insight limit
+        freemium_limit = get_insight_limit_for_user(current_user)
+
+        # User-specified limit takes precedence only if smaller than freemium limit
+        effective_limit = None
+        if freemium_limit is not None:
+            if limit is not None:
+                effective_limit = min(limit, freemium_limit)
+            else:
+                effective_limit = freemium_limit
+        elif limit is not None:
+            effective_limit = limit
+
+        # Apply effective limit
+        if effective_limit is not None:
+            filtered_insights = filtered_insights[:effective_limit]
+
+        returned_count = len(filtered_insights)
+        has_more = returned_count < total_count
+
+        items = [
             InsightSummary(
                 id=insight["id"],
                 run_id=insight["run_id"],
@@ -606,6 +690,14 @@ async def get_run_insights_endpoint(
             )
             for insight in filtered_insights
         ]
+
+        return InsightsResponse(
+            items=items,
+            total_count=total_count,
+            returned_count=returned_count,
+            has_more=has_more,
+            limit_applied=freemium_limit,
+        )
 
     except HTTPException:
         raise
@@ -648,10 +740,14 @@ async def get_insight(insight_id: str):
 @app.post("/insights/{insight_id}/explore", response_model=ExplorationResponse, tags=["Exploration"])
 async def explore_insight(
     insight_id: str,
-    request: ExploreRequest = ExploreRequest()
+    request: ExploreRequest = ExploreRequest(),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
 ):
     """
     Perform deep exploration of an insight using a heavy LLM.
+
+    **Requires authentication.** Free users are limited to 3 explorations per month.
 
     This endpoint triggers a comprehensive analysis of the insight, including:
     - Market analysis
@@ -661,6 +757,10 @@ async def explore_insight(
 
     The exploration is saved to the database and can be retrieved later.
 
+    **Freemium limits:**
+    - Free users: 3 deep explorations per month
+    - Premium users: unlimited explorations
+
     **Example:**
     ```json
     {
@@ -669,13 +769,16 @@ async def explore_insight(
     ```
     """
     try:
+        # Step 3: Check freemium limits
+        ensure_can_explore_insight(current_user, db)
+
         # Get insight from database
         insight = get_insight_by_id(insight_id=insight_id)
 
         if not insight:
             raise HTTPException(status_code=404, detail=f"Insight not found: {insight_id}")
 
-        logger.info(f"Exploring insight {insight_id} with LLM...")
+        logger.info(f"User {current_user.id} exploring insight {insight_id} with LLM...")
 
         # Call LLM for exploration
         exploration_result = explore_insight_with_llm(
@@ -688,17 +791,18 @@ async def explore_insight(
             model=request.model
         )
 
-        # Save to database
+        # Save to database with user_id
         exploration_id = save_exploration(
             insight_id=insight_id,
             model_used=exploration_result["model_used"],
             exploration_text=exploration_result["full_text"],
             monetization_hypotheses=json.dumps(exploration_result.get("monetization_ideas", [])),
             product_variants=json.dumps(exploration_result.get("product_variants", [])),
-            validation_steps=json.dumps(exploration_result.get("validation_steps", []))
+            validation_steps=json.dumps(exploration_result.get("validation_steps", [])),
+            user_id=current_user.id,
         )
 
-        logger.info(f"Exploration {exploration_id} saved for insight {insight_id}")
+        logger.info(f"Exploration {exploration_id} saved for insight {insight_id} by user {current_user.id}")
 
         return ExplorationResponse(
             exploration_id=exploration_id,
@@ -747,6 +851,98 @@ async def get_insight_explorations(insight_id: str):
     except Exception as e:
         logger.error(f"Error fetching explorations for insight {insight_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+# ============================================================================
+# Export Endpoints (Premium Only)
+# ============================================================================
+
+@app.get("/runs/{run_id}/export/csv", tags=["Export"])
+async def export_run_csv(
+    run_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Export run insights as CSV.
+
+    **Premium only.** Free users cannot export data.
+
+    Returns a CSV file containing all insights from the run.
+    """
+    # Step 3: Check export permission
+    ensure_can_export(current_user)
+
+    # TODO: Implement actual CSV export
+    # For now, return a stub that indicates the feature is available
+    raise HTTPException(
+        status_code=501,
+        detail="CSV export is not yet implemented. This endpoint is reserved for premium users."
+    )
+
+
+@app.get("/runs/{run_id}/export/json", tags=["Export"])
+async def export_run_json(
+    run_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Export run insights as JSON.
+
+    **Premium only.** Free users cannot export data.
+
+    Returns a JSON file containing all insights from the run.
+    """
+    # Step 3: Check export permission
+    ensure_can_export(current_user)
+
+    # TODO: Implement actual JSON export
+    # For now, return a stub that indicates the feature is available
+    raise HTTPException(
+        status_code=501,
+        detail="JSON export is not yet implemented. This endpoint is reserved for premium users."
+    )
+
+
+# ============================================================================
+# User & Usage Stats
+# ============================================================================
+
+@app.get("/me", tags=["User"])
+async def get_current_user_info(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get current user information.
+
+    Returns basic user info including plan status.
+    """
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "plan": current_user.plan,
+        "is_premium": current_user.is_premium,
+        "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
+    }
+
+
+@app.get("/me/usage", response_model=UsageStatsResponse, tags=["User"])
+async def get_usage_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Get current user's usage statistics.
+
+    Returns current usage counts and remaining quota for:
+    - Scans (daily limit for free users)
+    - Deep explorations (monthly limit for free users)
+    - Insight visibility (per-run limit for free users)
+    - Export capability
+
+    Useful for displaying remaining quota in the UI.
+    """
+    stats = get_user_usage_stats(current_user, db)
+    return UsageStatsResponse(**stats)
 
 
 # ============================================================================

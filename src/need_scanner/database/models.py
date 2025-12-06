@@ -1,6 +1,7 @@
 """SQLAlchemy ORM models for Need Scanner.
 
 Tables:
+- users: User accounts with plan info (Step 3: freemium)
 - runs: Scan run metadata AND job queue (Step 2 architecture)
 - insights: Individual insights from each run
 - insight_explorations: Deep explorations of insights
@@ -12,6 +13,11 @@ added later if needed.
 Job Queue Architecture (Step 2):
 The `runs` table serves as both job queue and results storage.
 Status lifecycle: queued → running → completed / failed
+
+Freemium Architecture (Step 3):
+- Users have a `plan` field ('free' or 'premium')
+- Runs and explorations are linked to users via `user_id`
+- Limits enforced in API layer before creating resources
 """
 
 from datetime import datetime
@@ -29,8 +35,19 @@ from sqlalchemy import (
     Index,
 )
 from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.sql import func
 
 Base = declarative_base()
+
+
+# ============================================================================
+# Plan Constants (Step 3: Freemium)
+# ============================================================================
+
+PLAN_FREE = "free"
+PLAN_PREMIUM = "premium"
+
+VALID_PLANS = {PLAN_FREE, PLAN_PREMIUM}
 
 
 # Valid job status values
@@ -40,6 +57,58 @@ JOB_STATUS_COMPLETED = "completed"
 JOB_STATUS_FAILED = "failed"
 
 VALID_JOB_STATUSES = {JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_COMPLETED, JOB_STATUS_FAILED}
+
+
+# ============================================================================
+# User Model (Step 3: Freemium)
+# ============================================================================
+
+class User(Base):
+    """User account with plan information.
+
+    For development, users are auto-created via X-Dummy-User-Id header.
+    This will be replaced by real auth (Supabase Auth / JWT) later.
+
+    Plans:
+    - 'free': Limited usage (1 scan/day, 3 explorations/month, 10 insights visible)
+    - 'premium': Unlimited usage
+    """
+
+    __tablename__ = "users"
+
+    # Primary key: UUID or external auth provider ID
+    id = Column(String(100), primary_key=True)
+
+    # Email (optional for now, will be required with real auth)
+    email = Column(String(255), nullable=True, unique=True)
+
+    # Plan: 'free' or 'premium'
+    plan = Column(String(20), nullable=False, default=PLAN_FREE)
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    # Relationships
+    runs = relationship("Run", back_populates="user")
+    explorations = relationship("InsightExploration", back_populates="user")
+
+    __table_args__ = (
+        Index("idx_users_email", email, unique=True),
+        Index("idx_users_plan", "plan"),
+    )
+
+    def __repr__(self):
+        return f"<User(id={self.id}, email={self.email}, plan={self.plan})>"
+
+    @property
+    def is_premium(self) -> bool:
+        """Check if user has premium plan."""
+        return self.plan == PLAN_PREMIUM
+
+    @property
+    def is_free(self) -> bool:
+        """Check if user has free plan."""
+        return self.plan == PLAN_FREE
 
 
 class Run(Base):
@@ -61,6 +130,9 @@ class Run(Base):
     # Primary key: timestamp-based ID like "20251126_143022"
     id = Column(String(50), primary_key=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    # User who created this run (Step 3: freemium)
+    user_id = Column(String(100), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     # =========================================================================
     # Job Queue Fields (Step 2)
@@ -114,15 +186,17 @@ class Run(Base):
     # =========================================================================
 
     insights = relationship("Insight", back_populates="run", cascade="all, delete-orphan")
+    user = relationship("User", back_populates="runs")
 
     __table_args__ = (
         Index("idx_runs_created_at", created_at.desc()),
         Index("idx_runs_status", "status"),
         Index("idx_runs_status_created_at", "status", "created_at"),
+        Index("idx_runs_user_id", "user_id"),
     )
 
     def __repr__(self):
-        return f"<Run(id={self.id}, status={self.status}, mode={self.mode}, progress={self.progress})>"
+        return f"<Run(id={self.id}, user_id={self.user_id}, status={self.status}, mode={self.mode}, progress={self.progress})>"
 
 
 class Insight(Base):
@@ -222,6 +296,9 @@ class InsightExploration(Base):
     # Foreign key to insights
     insight_id = Column(String(100), ForeignKey("insights.id", ondelete="CASCADE"), nullable=False)
 
+    # User who created this exploration (Step 3: freemium)
+    user_id = Column(String(100), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
     # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     model_used = Column(String(50), nullable=True)
@@ -234,10 +311,12 @@ class InsightExploration(Base):
 
     # Relationships
     insight = relationship("Insight", back_populates="explorations")
+    user = relationship("User", back_populates="explorations")
 
     __table_args__ = (
         Index("idx_explorations_insight_id", insight_id),
+        Index("idx_explorations_user_id", "user_id"),
     )
 
     def __repr__(self):
-        return f"<InsightExploration(id={self.id}, insight_id={self.insight_id}, model={self.model_used})>"
+        return f"<InsightExploration(id={self.id}, insight_id={self.insight_id}, user_id={self.user_id}, model={self.model_used})>"

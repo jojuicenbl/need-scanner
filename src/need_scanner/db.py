@@ -26,6 +26,7 @@ from .database import (
     get_db_session,
     init_db,
     check_db_connection,
+    User,
     Run,
     Insight,
     InsightExploration,
@@ -391,6 +392,7 @@ def save_exploration(
     monetization_hypotheses: Optional[str] = None,
     product_variants: Optional[str] = None,
     validation_steps: Optional[str] = None,
+    user_id: Optional[str] = None,
     db_path: Optional[Path] = None
 ) -> int:
     """
@@ -403,6 +405,7 @@ def save_exploration(
         monetization_hypotheses: JSON string of monetization ideas
         product_variants: JSON string of product variants
         validation_steps: JSON string of validation steps
+        user_id: ID of user creating this exploration (Step 3: freemium)
         db_path: Ignored (kept for backwards compatibility)
 
     Returns:
@@ -420,12 +423,13 @@ def save_exploration(
             monetization_hypotheses=monetization_hypotheses,
             product_variants=product_variants,
             validation_steps=validation_steps,
+            user_id=user_id,
         )
         db.add(exploration)
         db.flush()  # Get the auto-generated ID
         exploration_id = exploration.id
 
-    logger.info(f"Saved exploration {exploration_id} for insight {insight_id}")
+    logger.info(f"Saved exploration {exploration_id} for insight {insight_id} by user {user_id}")
     return exploration_id
 
 
@@ -467,6 +471,7 @@ def enqueue_run(
     max_insights: Optional[int] = None,
     input_pattern: str = "data/raw/posts_*.json",
     config_name: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict:
     """
     Create a new run in 'queued' status.
@@ -481,6 +486,7 @@ def enqueue_run(
         max_insights: Maximum number of insights to generate
         input_pattern: Glob pattern for input files
         config_name: Optional configuration name
+        user_id: ID of user creating this run (Step 3: freemium)
 
     Returns:
         Dictionary with the created run details
@@ -496,13 +502,14 @@ def enqueue_run(
             max_insights=max_insights,
             input_pattern=input_pattern,
             config_name=config_name,
+            user_id=user_id,
         )
         db.add(run)
         db.flush()  # Ensure the run is written
 
         result = _run_to_dict(run)
 
-    logger.info(f"Enqueued run {run_id} with status=queued")
+    logger.info(f"Enqueued run {run_id} for user {user_id} with status=queued")
     return result
 
 
@@ -731,6 +738,8 @@ def _run_to_dict(run: Run) -> Dict:
     return {
         "id": run.id,
         "created_at": run.created_at.isoformat() if run.created_at else None,
+        # User (Step 3: freemium)
+        "user_id": run.user_id,
         # Job queue fields
         "status": run.status,
         "started_at": run.started_at.isoformat() if run.started_at else None,
