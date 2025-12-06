@@ -42,7 +42,14 @@ from .db import (
     count_queued_jobs,
     count_running_jobs,
 )
-from .database import get_session, User
+from .services.cache import (
+    build_cache_key,
+    find_canonical_run_by_cache_key,
+    create_cached_run,
+    create_canonical_run,
+    get_effective_run_id_for_insights,
+)
+from .database import get_session, User, Run
 from .auth import get_current_user, get_optional_user
 from .limits import (
     ensure_can_run_scan,
@@ -381,6 +388,11 @@ async def create_run(
     **Important:** This endpoint does NOT run the scan synchronously.
     Poll `GET /runs/{run_id}` to check job status and progress.
 
+    **Caching (Step 4):**
+    If a scan with the same configuration has already been run today,
+    the results will be reused (cached). The run still counts toward
+    your daily limit, but no new computation is performed.
+
     **Freemium limits:**
     - Free users: 1 scan per day
     - Premium users: unlimited scans
@@ -419,6 +431,8 @@ async def create_run(
         logger.info(f"User {current_user.id} requesting scan: mode={request.mode}, run_mode={request.run_mode}")
 
         # Step 3: Check freemium limits
+        # Note: This counts existing runs for this user today.
+        # Cached runs still count toward the limit (by design).
         ensure_can_run_scan(current_user, db)
 
         # Validate mode
@@ -438,28 +452,87 @@ async def create_run(
         # Generate run ID
         run_id = generate_run_id()
 
-        # Enqueue the job (does NOT run the scan)
-        run_data = enqueue_run(
-            run_id=run_id,
+        # =====================================================================
+        # Step 4: Caching logic
+        # =====================================================================
+        # Build cache key for this scan configuration + today's date
+        cache_key = build_cache_key(
             mode=request.mode,
             run_mode=request.run_mode,
             max_insights=request.max_insights,
             input_pattern=request.input_pattern,
-            config_name=request.config_name,
-            user_id=current_user.id,
         )
 
-        logger.info(f"Scan job enqueued: run_id={run_id} for user {current_user.id}")
+        # Try to find an existing canonical run with this cache key
+        canonical_run = find_canonical_run_by_cache_key(db, cache_key)
 
-        return ScanResponse(
-            run_id=run_id,
-            status="queued",
-            created_at=run_data["created_at"],
-            mode=request.mode,
-            run_mode=request.run_mode,
-            max_insights=request.max_insights,
-            message=f"Job queued successfully. Poll GET /runs/{run_id} for status."
-        )
+        if canonical_run:
+            # ===== Case A or B: Reuse existing canonical run =====
+            # Create a cached run that references the canonical run
+            cached_run = create_cached_run(
+                db=db,
+                canonical_run=canonical_run,
+                user_id=current_user.id,
+                run_id=run_id,
+                mode=request.mode,
+                run_mode=request.run_mode,
+                max_insights=request.max_insights,
+                input_pattern=request.input_pattern,
+                config_name=request.config_name,
+            )
+
+            # Commit the transaction
+            db.commit()
+
+            # Determine appropriate message based on status
+            if canonical_run.status == "completed":
+                message = f"Results available (cached from today's scan). Use GET /runs/{run_id}/insights."
+            else:
+                message = f"Scan in progress. Poll GET /runs/{run_id} for status."
+
+            logger.info(
+                f"Created cached run {run_id} for user {current_user.id} "
+                f"(source={canonical_run.id}, status={cached_run.status})"
+            )
+
+            return ScanResponse(
+                run_id=run_id,
+                status=cached_run.status,
+                created_at=cached_run.created_at.isoformat() if cached_run.created_at else datetime.now().isoformat(),
+                mode=request.mode,
+                run_mode=request.run_mode,
+                max_insights=request.max_insights,
+                message=message,
+            )
+
+        else:
+            # ===== Case C: No canonical run found, create new one =====
+            new_run = create_canonical_run(
+                db=db,
+                user_id=current_user.id,
+                run_id=run_id,
+                cache_key=cache_key,
+                mode=request.mode,
+                run_mode=request.run_mode,
+                max_insights=request.max_insights,
+                input_pattern=request.input_pattern,
+                config_name=request.config_name,
+            )
+
+            # Commit the transaction
+            db.commit()
+
+            logger.info(f"Scan job enqueued: run_id={run_id} for user {current_user.id}")
+
+            return ScanResponse(
+                run_id=run_id,
+                status="queued",
+                created_at=new_run.created_at.isoformat() if new_run.created_at else datetime.now().isoformat(),
+                mode=request.mode,
+                run_mode=request.run_mode,
+                max_insights=request.max_insights,
+                message=f"Job queued successfully. Poll GET /runs/{run_id} for status."
+            )
 
     except HTTPException:
         raise
@@ -596,11 +669,16 @@ async def get_run_insights_endpoint(
     include_duplicates: bool = Query(False, description="Include historical duplicates"),
     solution_type: Optional[str] = Query(None, description="Filter by solution type (saas_b2b, saas_b2c, tooling_dev, etc.)"),
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
 ):
     """
     Get insights for a specific run.
 
     **Requires authentication.**
+
+    **Caching (Step 4):**
+    For cached runs, insights are automatically fetched from the canonical
+    (source) run. The experience is transparent to the user.
 
     **Freemium limits:**
     - Free users: Maximum 10 insights visible per run
@@ -619,10 +697,53 @@ async def get_run_insights_endpoint(
     - `solution_type`: Filter by solution type
     """
     try:
-        insights = get_run_insights(run_id=run_id, limit=None)  # Get all, filter later
+        # =====================================================================
+        # Step 4: Handle cached runs
+        # =====================================================================
+        # First, get the run to check if it's a cached run
+        run = db.query(Run).filter(Run.id == run_id).first()
+
+        if not run:
+            raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+
+        # Determine the effective run ID for querying insights
+        # For cached runs, we query insights from the source (canonical) run
+        effective_run_id = get_effective_run_id_for_insights(run)
+
+        # If this is a cached run pointing to a still-running canonical run,
+        # there may be no insights yet
+        if run.is_cached_result and run.source_run_id:
+            source_run = db.query(Run).filter(Run.id == run.source_run_id).first()
+            if source_run and source_run.status not in ["completed"]:
+                # Canonical run is still running, return empty with status info
+                return InsightsResponse(
+                    items=[],
+                    total_count=0,
+                    returned_count=0,
+                    has_more=False,
+                    limit_applied=get_insight_limit_for_user(current_user),
+                )
+            elif not source_run:
+                # Source run was deleted - this should not happen in normal operation
+                logger.error(f"Cached run {run_id} references missing source_run_id={run.source_run_id}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Internal error: source run not found for cached run {run_id}"
+                )
+
+        # Get insights using the effective run ID
+        insights = get_run_insights(run_id=effective_run_id, limit=None)  # Get all, filter later
 
         if not insights:
-            raise HTTPException(status_code=404, detail=f"No insights found for run_id: {run_id}")
+            # No insights yet - could be a run that just completed with 0 insights
+            # or a run that's still in progress
+            return InsightsResponse(
+                items=[],
+                total_count=0,
+                returned_count=0,
+                has_more=False,
+                limit_applied=get_insight_limit_for_user(current_user),
+            )
 
         # Apply filters
         filtered_insights = insights
